@@ -1,0 +1,90 @@
+id,provider,external_id,project_id,model,started_at,ended_at,status,source,metadata_json
+1,codex,Clarificar documentación Front,,,2026-05-13T16:29:46.475653+00:00,,active,sessions_jsonl,{}
+2,codex,Review Waf.php feedback,,,2026-05-13T16:29:46.488657+00:00,,active,sessions_jsonl,{}
+3,codex,**Márgenes laterales para componente mó…,,,2026-05-13T16:29:46.501646+00:00,,active,sessions_jsonl,{}
+4,codex,Oscurecer hero-area para resaltar texto,,,2026-05-13T16:29:46.513651+00:00,,active,sessions_jsonl,{}
+5,codex,Fix missing Modelo_RedesSociales class,,,2026-05-13T16:29:46.527655+00:00,,active,sessions_jsonl,{}
+6,codex,Centralizar textos tema Latice,,,2026-05-13T16:29:46.539650+00:00,,active,sessions_jsonl,{}
+7,codex,Idiomas en renderizacion publica,,,2026-05-13T16:29:46.552651+00:00,,active,sessions_jsonl,{}
+8,codex,Diseñar interfaz UI/UX inicial,,,2026-05-13T16:29:46.564649+00:00,,active,sessions_jsonl,{}
+9,codex,Verificar .gitignore,,,2026-05-13T16:29:46.577651+00:00,,active,sessions_jsonl,{}
+10,codex,Explicar uso de Git LFS,,,2026-05-13T16:29:46.589646+00:00,,active,sessions_jsonl,{}
+11,codex,Revisar y arreglar 404 estilo Doom,,,2026-05-13T16:29:46.601645+00:00,,active,sessions_jsonl,{}
+12,codex,Localiza version Layer Slider,,,2026-05-13T16:29:46.613646+00:00,,active,sessions_jsonl,{}
+13,codex,Recomienda extensiones VSCode,,,2026-05-13T16:29:46.629656+00:00,,active,sessions_jsonl,{}
+14,codex,Determinar si eres mejor que Claude,,,2026-05-13T16:29:46.642652+00:00,,active,sessions_jsonl,{}
+15,codex,Diseñar interfaz temas CMS,,,2026-05-13T16:29:46.653656+00:00,,active,sessions_jsonl,{}
+16,codex,Corregir error carga mySqlCRUD,,,2026-05-13T16:29:46.667646+00:00,,active,sessions_jsonl,{}
+17,codex,Convertir temas.js en clase con iní­,,,2026-05-13T16:29:46.680653+00:00,,active,sessions_jsonl,{}
+18,codex,Corregir error oh-my-posh en la ter,,,2026-05-13T16:29:46.694653+00:00,,active,sessions_jsonl,{}
+19,codex,Resuelve push a GitHub,,,2026-05-13T16:29:46.706661+00:00,,active,sessions_jsonl,{}
+20,codex,Fix array_filter null argument,,,2026-05-13T16:29:46.718318+00:00,,active,sessions_jsonl,{}
+21,codex,Documentar integración WELLHUB SUPs,,,2026-05-13T16:29:46.729312+00:00,,active,sessions_jsonl,{}
+22,codex,Arreglar error de conexión local,,,2026-05-13T16:29:46.744320+00:00,,active,sessions_jsonl,{}
+23,codex,Generar y cargar dump de base,,,2026-05-13T16:29:46.760323+00:00,,active,sessions_jsonl,{}
+24,codex,Analiza migración bb2_ a cache,,,2026-05-13T16:29:46.773322+00:00,,active,sessions_jsonl,{}
+25,codex,Corregir filtros con acentos UTF8,,,2026-05-13T16:29:46.785321+00:00,,active,sessions_jsonl,{}
+26,codex,Investigar forbidden en local,,,2026-05-13T16:29:46.796320+00:00,,active,sessions_jsonl,{}
+27,codex,Explica .env y autoload,,,2026-05-13T16:29:46.808310+00:00,,active,sessions_jsonl,{}
+28,codex,Configurar launch.json para Xdebug,,,2026-05-13T16:29:46.821319+00:00,,active,sessions_jsonl,{}
+29,codex,Soluciona trigger al guardar artíc,,,2026-05-13T16:29:46.833310+00:00,,active,sessions_jsonl,{}
+30,codex,Verificar CSV sucursal ciudad niños,,,2026-05-13T16:29:46.845318+00:00,,active,sessions_jsonl,{}
+31,codex,Evaluar arquitectura actual y migrar,,,2026-05-13T16:29:46.858329+00:00,,active,sessions_jsonl,{}
+32,codex,Crear demos de tienda moda 2026,,,2026-05-13T16:29:46.871324+00:00,,active,sessions_jsonl,{}
+33,codex,Configura remote GitHub Work,,,2026-05-13T16:29:46.885338+00:00,,active,sessions_jsonl,{}
+34,codex,Describe funcionalidad del mapa de n,,,2026-05-13T16:29:46.898333+00:00,,active,sessions_jsonl,{}
+35,codex,Haz funcionar productos.php,,,2026-05-13T16:29:46.911321+00:00,,active,sessions_jsonl,{}
+36,codex,Añadir guía de tallas en info extra,,,2026-05-13T16:29:46.923321+00:00,,active,sessions_jsonl,{}
+37,codex,Fix rating section layout,,,2026-05-13T16:29:46.937321+00:00,,active,sessions_jsonl,{}
+38,codex,Investigar rastreo modal mostrar,,,2026-05-13T16:29:46.951314+00:00,,active,sessions_jsonl,{}
+39,codex,Convertir proyecto a PHP y JS sin fr,,,2026-05-13T16:29:46.965323+00:00,,active,sessions_jsonl,{}
+40,codex,Traduce botones y textos al español,,,2026-05-13T16:29:46.979321+00:00,,active,sessions_jsonl,{}
+41,codex,Documenta proyecto y añade guías,,,2026-05-13T16:29:46.990323+00:00,,active,sessions_jsonl,{}
+42,codex,Analizar optimización arquitectura,,,2026-05-13T16:29:47.003331+00:00,,active,sessions_jsonl,{}
+43,codex,Implementar edición y evaluaciones,,,2026-05-13T16:29:47.015315+00:00,,active,sessions_jsonl,{}
+44,codex,Agregar textura con zoom a API,,,2026-05-13T16:29:47.027316+00:00,,active,sessions_jsonl,{}
+45,codex,Actualizar mysqlCRUD_v2 para puerto,,,2026-05-13T16:29:47.039313+00:00,,active,sessions_jsonl,{}
+46,codex,Resolver error CURL SSL en local,,,2026-05-13T16:29:47.051324+00:00,,active,sessions_jsonl,{}
+47,codex,Crear análisis de precios MX,,,2026-05-13T16:29:47.062321+00:00,,active,sessions_jsonl,{}
+48,codex,Encuentra carpetas pesadas,,,2026-05-13T16:29:47.075318+00:00,,active,sessions_jsonl,{}
+49,codex,Diseña mockup de pedidos,,,2026-05-13T16:29:47.088327+00:00,,active,sessions_jsonl,{}
+50,codex,Corrige proyecto tras merge,,,2026-05-13T16:29:47.099317+00:00,,active,sessions_jsonl,{}
+51,codex,Agregar seo_score inicial,,,2026-05-13T16:29:47.109316+00:00,,active,sessions_jsonl,{}
+52,codex,Optimiza metatags con IA por API,,,2026-05-13T16:29:47.120315+00:00,,active,sessions_jsonl,{}
+53,codex,Revisar carga de toolbar,,,2026-05-13T16:29:47.131317+00:00,,active,sessions_jsonl,{}
+54,codex,Analiza archivo Figma,,,2026-05-13T16:29:47.143323+00:00,,active,sessions_jsonl,{}
+55,codex,Crear demo HTML,,,2026-05-13T16:29:47.155323+00:00,,active,sessions_jsonl,{}
+56,codex,Aclarar AGENTS.md o AGENT.md,,,2026-05-13T16:29:47.168324+00:00,,active,sessions_jsonl,{}
+57,codex,Explica containers responsive,,,2026-05-13T16:29:47.179311+00:00,,active,sessions_jsonl,{}
+58,codex,Añadir botones outline-black,,,2026-05-13T16:29:47.192312+00:00,,active,sessions_jsonl,{}
+59,codex,Respaldar public_html comprimido,,,2026-05-13T16:29:47.204312+00:00,,active,sessions_jsonl,{}
+60,codex,Mejorar seguimiento de pedidos,,,2026-05-13T16:29:47.217335+00:00,,active,sessions_jsonl,{}
+61,codex,Completar SEO tags,,,2026-05-13T16:29:47.230322+00:00,,active,sessions_jsonl,{}
+62,codex,Implementar softdelete en cms_pag,,,2026-05-13T16:29:47.242323+00:00,,active,sessions_jsonl,{}
+63,codex,Sugiere mini dashboard CMS,,,2026-05-13T16:29:47.254334+00:00,,active,sessions_jsonl,{}
+64,codex,Optimiza consulta de productos,,,2026-05-13T16:29:47.267335+00:00,,active,sessions_jsonl,{}
+65,codex,Copiar tarjetas de tiendas,,,2026-05-13T16:29:47.280315+00:00,,active,sessions_jsonl,{}
+66,codex,Construir interfaz seguimiento de pe,,,2026-05-13T16:29:47.292351+00:00,,active,sessions_jsonl,{}
+67,codex,Analiza modularizar main.js,,,2026-05-13T16:29:47.304865+00:00,,active,sessions_jsonl,{}
+68,codex,Separa media queries SCSS,,,2026-05-13T16:29:47.317502+00:00,,active,sessions_jsonl,{}
+69,codex,Implementa caché de imágenes,,,2026-05-13T16:29:47.329498+00:00,,active,sessions_jsonl,{}
+70,codex,Analiza mejoras PIT,,,2026-05-13T16:29:47.342502+00:00,,active,sessions_jsonl,{}
+71,codex,Usa config de imágenes ECOM,,,2026-05-13T16:29:47.354505+00:00,,active,sessions_jsonl,{}
+72,codex,Convierte guía de talla en panel,,,2026-05-13T16:29:47.367499+00:00,,active,sessions_jsonl,{}
+73,codex,Añade contador al carrito,,,2026-05-13T16:29:47.381522+00:00,,active,sessions_jsonl,{}
+74,codex,Configura PATH de Claude Code,,,2026-05-13T16:29:47.395510+00:00,,active,sessions_jsonl,{}
+75,codex,Migrar productos a app 30,,,2026-05-13T16:29:47.409529+00:00,,active,sessions_jsonl,{}
+76,codex,Maqueta la vista carrito,,,2026-05-13T16:29:47.422065+00:00,,active,sessions_jsonl,{}
+77,codex,Crear enlace a carrito,,,2026-05-13T16:29:47.435668+00:00,,active,sessions_jsonl,{}
+78,codex,Actualizar README y AGENTS,,,2026-05-13T16:29:47.448675+00:00,,active,sessions_jsonl,{}
+79,codex,Actualizar progress bar del carrito,,,2026-05-13T16:29:47.463668+00:00,,active,sessions_jsonl,{}
+80,codex,Ajusta carrito responsive,,,2026-05-13T16:29:47.477665+00:00,,active,sessions_jsonl,{}
+81,codex,Corrige botón agregar bordado,,,2026-05-13T16:29:47.488663+00:00,,active,sessions_jsonl,{}
+82,codex,Crea monitor de tokens,,,2026-05-13T16:29:47.501665+00:00,,active,sessions_jsonl,{}
+83,claude,ac48f1b5-2156-453f-a2ce-9249f8589ac1,1546,claude-sonnet-4-6,2026-05-13T16:32:15.280316+00:00,,active,projects_jsonl,{}
+84,claude,0fa00235-4176-45d7-bd4d-c782942217d7,628,claude-haiku-4-5-20251001,2026-05-13T16:32:26.820006+00:00,,active,projects_jsonl,{}
+85,claude,c6a3aeaf-0c1d-4aa4-b680-5ada7c89d63a,1067,claude-sonnet-4-6,2026-05-13T16:32:40.530233+00:00,,active,projects_jsonl,{}
+86,claude,ada12bce-9468-45de-9c6f-5ec2c9ea5316,2448,claude-opus-4-7,2026-05-13T16:32:40.761515+00:00,,active,projects_jsonl,{}
+87,claude,be9cec12-5f07-48b2-a8c8-7053e9053807,2464,claude-haiku-4-5-20251001,2026-05-13T16:32:41.265133+00:00,,active,projects_jsonl,{}
+88,claude,92737e35-146b-4770-948d-aedfe2f11cd2,1138,claude-sonnet-4-6,2026-05-13T16:32:52.058989+00:00,,active,projects_jsonl,{}
+89,claude,69c9d0b0-0bba-4959-829e-ae42fa173e3b,1067,claude-haiku-4-5-20251001,2026-05-13T16:32:52.921672+00:00,,active,projects_jsonl,{}

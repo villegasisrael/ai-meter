@@ -1,0 +1,1 @@
+{"source":"winprobe_cpp","cpu_percent":41.9,"ram_percent":91.0,"ram_used_mb":14397.5,"ram_total_mb":15791.2,"disk_percent":53.5,"net_sent_mb":15713.2,"net_recv_mb":17205.5}

@@ -1,0 +1,13 @@
+C:\xampp\htdocs\clawdex\native\AiMeter.SensorProbe\bin\Release\net6.0\win-x64\ai-meter-sensor-probe.exe
+C:\xampp\htdocs\clawdex\native\AiMeter.SensorProbe\bin\Release\net6.0\win-x64\ai-meter-sensor-probe.dll
+C:\xampp\htdocs\clawdex\native\AiMeter.SensorProbe\bin\Release\net6.0\win-x64\ai-meter-sensor-probe.deps.json
+C:\xampp\htdocs\clawdex\native\AiMeter.SensorProbe\bin\Release\net6.0\win-x64\ai-meter-sensor-probe.runtimeconfig.json
+C:\xampp\htdocs\clawdex\native\AiMeter.SensorProbe\bin\Release\net6.0\win-x64\ai-meter-sensor-probe.pdb
+C:\xampp\htdocs\clawdex\native\AiMeter.SensorProbe\bin\Release\net6.0\win-x64\HidSharp.dll
+C:\xampp\htdocs\clawdex\native\AiMeter.SensorProbe\bin\Release\net6.0\win-x64\LibreHardwareMonitorLib.dll
+C:\xampp\htdocs\clawdex\native\AiMeter.SensorProbe\bin\Release\net6.0\win-x64\Mono.Posix.NETStandard.dll
+C:\xampp\htdocs\clawdex\native\AiMeter.SensorProbe\bin\Release\net6.0\win-x64\System.CodeDom.dll
+C:\xampp\htdocs\clawdex\native\AiMeter.SensorProbe\bin\Release\net6.0\win-x64\System.IO.Ports.dll
+C:\xampp\htdocs\clawdex\native\AiMeter.SensorProbe\bin\Release\net6.0\win-x64\System.Management.dll
+C:\xampp\htdocs\clawdex\native\AiMeter.SensorProbe\bin\Release\net6.0\win-x64\MonoPosixHelper.dll
+C:\xampp\htdocs\clawdex\native\AiMeter.SensorProbe\bin\Release\net6.0\win-x64\libMonoPosixHelper.dll

@@ -1,0 +1,68 @@
+{
+  "format": 1,
+  "restore": {
+    "C:\\xampp\\htdocs\\clawdex\\native\\AiMeter.SensorProbe\\AiMeter.SensorProbe.csproj": {}
+  },
+  "projects": {
+    "C:\\xampp\\htdocs\\clawdex\\native\\AiMeter.SensorProbe\\AiMeter.SensorProbe.csproj": {
+      "version": "1.0.0",
+      "restore": {
+        "projectUniqueName": "C:\\xampp\\htdocs\\clawdex\\native\\AiMeter.SensorProbe\\AiMeter.SensorProbe.csproj",
+        "projectName": "ai-meter-sensor-probe",
+        "projectPath": "C:\\xampp\\htdocs\\clawdex\\native\\AiMeter.SensorProbe\\AiMeter.SensorProbe.csproj",
+        "packagesPath": "C:\\Users\\DISEÑO WEB\\.nuget\\packages\\",
+        "outputPath": "C:\\xampp\\htdocs\\clawdex\\native\\AiMeter.SensorProbe\\obj\\",
+        "projectStyle": "PackageReference",
+        "configFilePaths": [
+          "C:\\xampp\\htdocs\\clawdex\\native\\AiMeter.SensorProbe\\NuGet.Config",
+          "C:\\Users\\DISEÑO WEB\\AppData\\Roaming\\NuGet\\NuGet.Config"
+        ],
+        "originalTargetFrameworks": [
+          "net6.0"
+        ],
+        "sources": {
+          "https://api.nuget.org/v3/index.json": {}
+        },
+        "frameworks": {
+          "net6.0": {
+            "targetAlias": "net6.0",
+            "projectReferences": {}
+          }
+        },
+        "warningProperties": {
+          "warnAsError": [
+            "NU1605"
+          ]
+        }
+      },
+      "frameworks": {
+        "net6.0": {
+          "targetAlias": "net6.0",
+          "dependencies": {
+            "LibreHardwareMonitorLib": {
+              "target": "Package",
+              "version": "[0.9.4, )"
+            }
+          },
+          "imports": [
+            "net461",
+            "net462",
+            "net47",
+            "net471",
+            "net472",
+            "net48",
+            "net481"
+          ],
+          "assetTargetFallback": true,
+          "warn": true,
+          "frameworkReferences": {
+            "Microsoft.NETCore.App": {
+              "privateAssets": "all"
+            }
+          },
+          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\6.0.415\\RuntimeIdentifierGraph.json"
+        }
+      }
+    }
+  }
+}

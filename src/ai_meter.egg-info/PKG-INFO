@@ -1,0 +1,327 @@
+Metadata-Version: 2.4
+Name: ai-meter
+Version: 0.1.0
+Summary: Strict local-only TUI monitor for Codex and Claude usage
+Author: ai-meter
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: textual>=0.72.0
+Requires-Dist: rich>=13.7.0
+Requires-Dist: typer>=0.12.3
+Requires-Dist: pydantic>=2.8.2
+Requires-Dist: platformdirs>=4.2.2
+Requires-Dist: psutil>=6.0.0
+
+# ai-meter
+
+Monitor TUI para Windows estilo **btop** con seguimiento de uso de IA (Claude y Codex) en tiempo real, todo local, sin llamadas a modelos.
+
+```
+view=1 | model-calls=off | usage-api=on | refresh=1000ms | 13:01:40
+┌─ CLAUDE ─────────────────┐  ┌─ SYSTEM winprobe_cpp ──────────────────┐
+│ plan: claude_pro          │  │ cpu  ███████████░░░░░░░░  62.1%         │
+│ 5h     ████░░░░░░  47%   │  │  C1  ███░   39%   C2  █░   18%          │
+│        reset 8m           │  │  C3  ███░   37%   C4  ██░  27%          │
+│ weekly ████████░░  86%   │  │  ...                                     │
+│        reset 4d 4h        │  │ ram  ████████████████░░░  88.0%         │
+│ api fetched 19:01:27      │  │ disk ████████████░░░░░░░  54.8%         │
+│ tokens (last): 133        │  │ temp 94.1°C (wmi:acpi)                  │
+├─ CODEX ──────────────────┤  │ gpu  65.0°C (GTX 1650 Ti)               │
+│ plan: plus                │  │ net  ↑16419MB  ↓18271MB                 │
+│ 5h     █░░░░░░░░░  14%   │  └────────────────────────────────────────┘
+│ weekly █░░░░░░░░░  12%   │  ┌─ LIVE ACTIVITY ───────────────────────┐
+└──────────────────────────┘  │ 18:18:39 claude user    claude-vscode  │
+                               │ 18:18:34 claude assistant ...          │
+                               └────────────────────────────────────────┘
+```
+
+## Características
+
+- **Límites Claude en tiempo real**: 5h y semanal con % y countdown via OAuth usage API (sin consumir tokens)
+- **Límites Codex**: parseados desde archivos locales `~/.codex`
+- **Hardware estilo btop**: CPU total + 16 barras por core, RAM, disco, red
+- **Temperatura GPU**: NVIDIA/AMD sin necesidad de admin
+- **Temperatura CPU**: requiere admin en Ryzen (ver sección correspondiente)
+- **Live Activity**: eventos nuevos de Claude/Codex detectados en archivos locales
+- **Cero llamadas a modelos**: `model-calls=off` siempre
+
+---
+
+## Instalación
+
+```powershell
+cd c:\xampp\htdocs\clawdex
+pip install -e .
+```
+
+O global con pipx:
+
+```powershell
+pipx install .
+```
+
+### Dependencias nativas (ya incluidas en `src/ai_meter/bin/win-x64/`)
+
+| Archivo | Fuente | Función |
+|---------|--------|---------|
+| `ai-meter-winprobe.exe` | C++ Win32 | CPU%, RAM, disco, red (streaming) |
+| `ai-meter-sensor-probe.exe` | C# + LibreHardwareMonitor | Temp CPU/GPU, carga por core |
+| `LibreHardwareMonitorLib.dll` | NuGet | Sensores hardware |
+
+Para reconstruir los binarios:
+
+```powershell
+.\scripts\build_native.ps1   # requiere dotnet 6+ y g++ (MinGW)
+```
+
+---
+
+## Configuración Claude OAuth Token
+
+Para ver los límites reales de uso de Claude (5h y semanal), crea un archivo `.env` en la raíz del proyecto:
+
+```
+TOKEN = Bearer sk-ant-oat01--TU_TOKEN_AQUI
+```
+
+**Cómo obtener el token**: es el mismo que usa Claude Code internamente. Puedes capturarlo interceptando las cabeceras HTTP de Claude Code con las DevTools del sistema o usando el token del archivo de sesión de OAuth.
+
+El endpoint usado es `GET https://api.anthropic.com/api/oauth/usage` — es interno de Anthropic, **no consume tokens de modelo** y no aparece en el billing.
+
+Cabeceras requeridas:
+```
+Authorization: Bearer sk-ant-oat01--...
+anthropic-beta: oauth-2025-04-20
+User-Agent: claude-code/2.0.32
+```
+
+El token se cachea en memoria. La API se consulta **máximo una vez cada 60 segundos**.
+
+---
+
+## Uso
+
+```powershell
+ai-meter run       # Lanzar monitor TUI
+ai-meter doctor    # Diagnóstico completo del sistema
+ai-meter paths     # Ver rutas resueltas
+ai-meter export --format json --out datos.json
+ai-meter export --format csv  --out datos.csv
+```
+
+Si Windows bloquea el wrapper `.exe`:
+
+```powershell
+python -m ai_meter.main run
+```
+
+Alias PowerShell permanente:
+
+```powershell
+Add-Content $PROFILE 'function aimeter { python -m ai_meter.main @args }'
+. $PROFILE
+aimeter run
+```
+
+### Controles TUI
+
+| Tecla | Acción |
+|-------|--------|
+| `+` / `=` | Subir refresh (+100ms, máx 5000ms) |
+| `-` | Bajar refresh (-100ms, mín 100ms) |
+| `r` | Refresh inmediato |
+| `p` | Pausar / reanudar |
+| `h` | Ayuda |
+| `1`–`7` | Cambiar vista |
+| `q` | Salir |
+
+---
+
+## Temperatura CPU en Ryzen (sin admin permanente)
+
+### Por qué requiere admin
+
+En AMD Ryzen, la temperatura se lee via **MSR (Model Specific Register)** — acceso de kernel. LibreHardwareMonitor necesita cargar un driver (`WinRing0x64.sys`) que requiere privilegios elevados. Sin admin, el sensor se detecta pero lee `0°C`.
+
+### Opción A — Ejecutar terminal como Administrador (solución actual)
+
+La más sencilla. Abre PowerShell como Administrador y ejecuta normalmente:
+
+```powershell
+# Click derecho en PowerShell → "Ejecutar como administrador"
+python -m ai_meter.main run
+```
+
+La temperatura CPU aparece inmediatamente (`lhm:Core (Tctl/Tdie)`).
+
+### Opción B — Windows Service (instalación única, ejecución siempre normal)
+
+**Concepto**: instalar el sensor probe como servicio Windows que corre como `SYSTEM`. El servicio escribe temperatura a un archivo/pipe local. El TUI Python lo lee sin requerir admin nunca más.
+
+```
+[ai-meter-temp-service (SYSTEM)]  →  C:\ProgramData\ai-meter\sensor.json
+[ai-meter run (usuario normal)]    ←  lee sensor.json
+```
+
+**Estado**: _pendiente de implementar_. El comando planificado será:
+
+```powershell
+# Una sola vez, como Administrador:
+ai-meter install-service
+
+# Desinstalar:
+ai-meter uninstall-service
+
+# Después de eso, siempre como usuario normal:
+ai-meter run   # temperatura CPU disponible sin admin
+```
+
+### Opción C — Task Scheduler (alternativa más simple)
+
+Registrar una tarea programada que ejecute el probe como admin y escriba a un archivo temporal.
+
+```powershell
+# Como Administrador, una sola vez:
+$probe = "C:\xampp\htdocs\clawdex\src\ai_meter\bin\win-x64\ai-meter-sensor-probe.exe"
+$outfile = "$env:ProgramData\ai-meter\sensor.json"
+New-Item -ItemType Directory -Force "$env:ProgramData\ai-meter" | Out-Null
+
+$action  = New-ScheduledTaskAction -Execute "powershell" `
+    -Argument "-NoProfile -Command `"& '$probe' --once | Set-Content '$outfile'`""
+$trigger = New-ScheduledTaskTrigger -RepetitionInterval (New-TimeSpan -Seconds 10) -Once -At (Get-Date)
+$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Seconds 8)
+$principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -RunLevel Highest
+
+Register-ScheduledTask -TaskName "ai-meter-sensor" `
+    -Action $action -Trigger $trigger `
+    -Settings $settings -Principal $principal -Force
+
+Write-Host "Tarea registrada. El probe escribe en: $outfile"
+```
+
+Desregistrar:
+
+```powershell
+Unregister-ScheduledTask -TaskName "ai-meter-sensor" -Confirm:$false
+```
+
+**Estado**: _pendiente de implementar la lectura desde archivo en el collector Python_.
+
+### Temperatura GPU (ya funciona sin admin)
+
+El NVIDIA GTX 1650 Ti y GPUs similares reportan temperatura via LibreHardwareMonitor **sin requerir driver de kernel**. Funciona siempre, incluso sin admin.
+
+---
+
+## Diagnóstico
+
+```powershell
+ai-meter doctor
+```
+
+Muestra:
+- Fuentes de datos disponibles (Claude, Codex)
+- Estado del sensor probe y CPU temp
+- GPU temp y cores detectados
+- Token OAuth status (sin revelar el token)
+- Rutas de archivos locales
+
+Ejemplo de salida relevante:
+
+```
+cpu temp     │ unknown (lhm:needs_admin) — run as admin
+gpu temp     │ 65.0 C (NVIDIA GeForce GTX 1650 Ti)
+cpu cores    │ 16
+sensor probe │ needs_admin=true, sensor_count=89
+```
+
+---
+
+## Fuentes de datos
+
+### Claude
+| Fuente | Datos | Requiere |
+|--------|-------|---------|
+| `~/.claude/projects/**/*.jsonl` | Tokens por sesión, eventos | Solo lectura |
+| `~/.claude/stats-cache.json` | Tokens totales estimados | Solo lectura |
+| OAuth Usage API | Límites 5h/semanal reales | Token en `.env` |
+
+### Codex
+| Fuente | Datos | Requiere |
+|--------|-------|---------|
+| `~/.codex/session_index.jsonl` | Sesiones | Solo lectura |
+| `~/.codex/sessions/*.jsonl` | Eventos por sesión | Solo lectura |
+| `~/.codex/logs_2.sqlite` | Logs estructurados | Solo lectura |
+| `~/.codex/config.toml` | Plan y rate limits | Solo lectura |
+
+### Sistema
+| Fuente | Datos | Requiere |
+|--------|-------|---------|
+| `ai-meter-winprobe.exe` | CPU%, RAM, disco, red | Ninguno |
+| `ai-meter-sensor-probe.exe` | Temp CPU/GPU, carga por core | Admin para CPU temp |
+| WMI `MSAcpi_ThermalZoneTemperature` | Temp CPU fallback | Admin |
+
+---
+
+## Arquitectura
+
+```
+ai-meter/
+├── src/ai_meter/
+│   ├── main.py              # CLI (typer): run, doctor, paths, export
+│   ├── app.py               # MonitorEngine: orquesta collectors y snapshots
+│   ├── config.py            # AppConfig (TOML)
+│   ├── models.py            # Pydantic models
+│   ├── paths.py             # Resolución de rutas locales
+│   ├── security.py          # Redacción de secretos
+│   ├── runtime_store.py     # MemoryOffsetStore para JSONL offsets
+│   ├── collectors/
+│   │   ├── claude.py        # Lee ~/.claude/ (JSONL, stats-cache)
+│   │   ├── claude_api_usage.py  # OAuth usage API (60s cache)
+│   │   ├── codex.py         # Lee ~/.codex/ (JSONL, SQLite)
+│   │   └── system.py        # winprobe + sensor probe + WMI fallback
+│   ├── tui/
+│   │   ├── app.py           # Textual App: layout, timers, render
+│   │   └── widgets.py       # render_bar, render_mini_bar, render_core_grid
+│   ├── storage/
+│   │   └── db.py            # SQLite (solo para export/historial)
+│   └── bin/win-x64/         # Binarios nativos precompilados
+│       ├── ai-meter-winprobe.exe
+│       ├── ai-meter-sensor-probe.exe
+│       └── LibreHardwareMonitorLib.dll
+├── native/
+│   ├── winprobe/            # Código C++ del winprobe
+│   └── AiMeter.SensorProbe/ # Código C# del sensor probe
+└── scripts/
+    ├── build_native.ps1     # Compila C# y C++
+    └── build_exe.ps1        # Empaqueta todo con PyInstaller
+```
+
+### Timers del TUI
+
+| Timer | Intervalo | Qué hace |
+|-------|-----------|---------|
+| Render | `refresh_ms` (default 1000ms) | Actualiza pantalla |
+| Light collect | `refresh_ms` | CPU%, RAM, disco, red (winprobe) |
+| Heavy collect | `collector_heavy_interval_s` (10s) | Temp, cores, Claude/Codex local |
+| Claude API | **60s fijo** | Límites 5h/semanal via OAuth API |
+
+---
+
+## Empaquetado EXE
+
+```powershell
+.\scripts\build_exe.ps1
+.\dist\ai-meter.exe doctor
+.\dist\ai-meter.exe run
+```
+
+---
+
+## Privacidad
+
+- **`model-calls=off`** siempre: ningún texto o prompt sale del equipo hacia un modelo.
+- La OAuth Usage API solo recibe el token de auth, **no datos de sesión ni prompts**.
+- Los archivos locales (`~/.claude`, `~/.codex`) se leen pero nunca se envían a ningún servidor.
+- Secrets en metadata se redactan antes de mostrar o persistir (`security.redact_sensitive`).
+- SQLite es opcional y solo para export/historial propio.
