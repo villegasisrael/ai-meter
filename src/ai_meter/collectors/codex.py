@@ -48,11 +48,12 @@ class CodexCollector(Collector):
 
     def collect(self) -> CollectBatch:
         batch = CollectBatch(provider_status=self.probe())
-        rate_limit_meta = self._collect_rate_limits()
+        session_files = self._session_files()
+        rate_limit_meta = self._collect_latest_session_rate_limits(session_files) or self._collect_rate_limits()
         if rate_limit_meta:
             batch.provider_status.metadata.update(rate_limit_meta)
         session_rows_by_file: list[tuple[Path, list[dict[str, Any]]]] = []
-        for fp in self._session_files():
+        for fp in session_files:
             try:
                 session_rows_by_file.append((fp, self._read_new_jsonl(fp)))
             except OSError:
@@ -279,6 +280,37 @@ class CodexCollector(Collector):
                 "limit_reached": rate_limits.get("limit_reached"),
                 "primary": rate_limits.get("primary"),
                 "secondary": rate_limits.get("secondary"),
+                "source": "logs_sqlite",
+            }
+        }
+
+    def _collect_latest_session_rate_limits(self, files: list[Path]) -> dict[str, Any]:
+        latest: tuple[datetime, dict[str, Any]] | None = None
+        for fp in files[:6]:
+            for obj in _read_tail_jsonl(fp, max_bytes=256 * 1024, max_lines=400):
+                payload = obj.get("payload") if isinstance(obj.get("payload"), dict) else {}
+                rate_limits = payload.get("rate_limits") if isinstance(payload, dict) else None
+                if not isinstance(rate_limits, dict):
+                    continue
+                plan_type = rate_limits.get("plan_type")
+                if not plan_type:
+                    continue
+                ts = _parse_ts(obj.get("timestamp"))
+                if latest is None or ts > latest[0]:
+                    latest = (ts, rate_limits)
+
+        if latest is None:
+            return {}
+
+        rate_limits = latest[1]
+        return {
+            "rate_limits": {
+                "plan_type": rate_limits.get("plan_type"),
+                "allowed": rate_limits.get("allowed"),
+                "limit_reached": rate_limits.get("limit_reached"),
+                "primary": rate_limits.get("primary"),
+                "secondary": rate_limits.get("secondary"),
+                "source": "sessions_jsonl",
             }
         }
 
@@ -300,6 +332,32 @@ def _try_json_parse(text: str) -> dict[str, Any] | None:
             return obj if isinstance(obj, dict) else None
         except json.JSONDecodeError:
             return None
+
+
+def _read_tail_jsonl(file_path: Path, max_bytes: int, max_lines: int) -> list[dict[str, Any]]:
+    try:
+        size = file_path.stat().st_size
+        start = max(0, size - max_bytes)
+        with file_path.open("rb") as handle:
+            handle.seek(start)
+            if start > 0:
+                handle.readline()
+            raw_lines = handle.readlines()
+    except OSError:
+        return []
+
+    rows: list[dict[str, Any]] = []
+    for raw in raw_lines[-max_lines:]:
+        line = raw.decode("utf-8", errors="ignore").strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            rows.append(obj)
+    return rows
 
 
 def _parse_ts(value: Any) -> datetime:

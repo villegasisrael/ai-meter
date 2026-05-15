@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from threading import Thread
 from typing import Any
 
@@ -8,16 +8,19 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.timer import Timer
-from textual.widgets import Footer, Header, Static
+from textual.widgets import Footer, Static
 
 from ai_meter.app import MonitorEngine
 from ai_meter.models import RuntimeState
 from ai_meter.tui.widgets import (
+    cpu_gradient_color,
     latest_field,
     latest_total,
     render_bar,
     render_core_grid,
+    render_cpu_history_graph,
     render_sparkline,
+    render_temp_bar,
     usage_values,
 )
 
@@ -42,12 +45,25 @@ class AiMeterTui(App[None]):
 
     CSS = """
     Screen { background: #0a0e14; color: #cdd6f4; }
-    #main { height: 1fr; }
-    #left { width: 45%; height: auto; }
-    #right { width: 55%; height: auto; }
-    #events, #system { height: auto; }
-    .panel { border: round #2a3f52; padding: 1; margin: 0 1 1 1; }
-    #status_line { height: auto; padding: 0 1; color: #6e9ab0; background: #0d1117; }
+
+    #status_line { height: 1; padding: 0 1; color: #6e9ab0; background: #0d1117; }
+
+    /* Top row: CPU history graph (left) + CPU details (right) */
+    #top_row { height: auto; }
+    #cpu_graph { width: 50%; height: auto; border: round #1e3a50; padding: 0 1; margin: 0 1 1 0; }
+    #cpu_details { width: 50%; height: auto; border: round #1e3a50; padding: 0 1; margin: 0 0 1 0; }
+
+    /* Bottom row: AI panels (left) + system+events (right) */
+    #bottom_row { height: 1fr; }
+    #ai_panels { width: 50%; height: 1fr; }
+    #right_panel { width: 50%; height: 1fr; }
+
+    /* Individual panels */
+    .panel { border: round #2a3f52; padding: 0 1; margin: 0 1 1 0; }
+    #claude_panel { height: 1fr; margin: 0 1 1 0; border: round #2a3f52; padding: 0 1; }
+    #codex_panel  { height: 1fr; margin: 0 1 1 0; border: round #2a3f52; padding: 0 1; }
+    #system       { height: auto; margin: 0 0 1 0; border: round #2a3f52; padding: 0 1; }
+    #events       { height: 1fr; margin: 0 0 1 0; border: round #2a3f52; padding: 0 1; }
     """
 
     def __init__(self, engine: MonitorEngine) -> None:
@@ -65,15 +81,17 @@ class AiMeterTui(App[None]):
         self._api_collecting = False
 
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=True)
         yield Static("", id="status_line")
-        with Horizontal(id="main"):
-            with Vertical(id="left"):
-                yield Static("", id="claude_panel", classes="panel")
-                yield Static("", id="codex_panel", classes="panel")
-            with Vertical(id="right"):
-                yield Static("", id="system", classes="panel")
-                yield Static("", id="events", classes="panel")
+        with Horizontal(id="top_row"):
+            yield Static("", id="cpu_graph")
+            yield Static("", id="cpu_details")
+        with Horizontal(id="bottom_row"):
+            with Vertical(id="ai_panels"):
+                yield Static("", id="claude_panel")
+                yield Static("", id="codex_panel")
+            with Vertical(id="right_panel"):
+                yield Static("", id="system")
+                yield Static("", id="events")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -81,7 +99,6 @@ class AiMeterTui(App[None]):
         self._render_snapshot()
         self.set_timer(0.05, self._collect_light)
         self.set_timer(0.15, self._collect_heavy)
-        # Fetch Claude API usage immediately on start, then every 60s
         if self.engine.claude_api is not None:
             self.set_timer(0.5, self._collect_claude_api)
             self._api_collect_timer = self.set_interval(60.0, self._collect_claude_api)
@@ -165,6 +182,25 @@ class AiMeterTui(App[None]):
             f"{datetime.now().strftime('%H:%M:%S')} | [green]+[/]/[red]-[/]"
         )
 
+        # --- CPU graph (top-left) ---
+        cpu_graph_widget = self.query_one("#cpu_graph", Static)
+        panel_w = cpu_graph_widget.size.width
+        graph_w = max(20, panel_w - 4) if panel_w > 4 else max(20, (self.size.width // 2) - 6)
+        cpu = float(snap.system_meta.get("cpu_percent", 0.0)) if snap.system_meta else 0.0
+        cpu_color = cpu_gradient_color(cpu)
+        graph_header = (
+            f"[bold cyan]CPU[/] [grey40]history ({len(snap.cpu_history)} samples)[/]  "
+            f"[{cpu_color}]{cpu:.1f}%[/]"
+        )
+        graph = render_cpu_history_graph(snap.cpu_history, graph_w, height=8)
+        cpu_graph_widget.update(f"{graph_header}\n{graph}")
+
+        # --- CPU details (top-right) ---
+        self.query_one("#cpu_details", Static).update(
+            self._render_cpu_details(snap.system_meta)
+        )
+
+        # --- Claude panel (bottom-left top) ---
         claude_total = latest_total(snap.claude_usage)
         codex_total = latest_total(snap.codex_usage)
         claude_vals = usage_values(snap.claude_usage)
@@ -184,11 +220,25 @@ class AiMeterTui(App[None]):
             seven_d_line = self._render_api_limit(api.seven_day_pct, api.seven_day_reset_secs)
             api_tag_line = f"[grey40]api fetched {api.fetched_at}[/]"
         else:
-            five_h_line = "[yellow]unknown[/] [grey40](no token)[/]"
-            seven_d_line = "[yellow]unknown[/] [grey40](no token)[/]"
-            api_tag_line = "[grey40]set TOKEN in .env for live limits[/]"
+            err = self.engine.claude_api.last_error if self.engine.claude_api is not None else None
+            if self.engine.claude_api is None:
+                five_h_line = "[yellow]unknown[/] [grey40](no token)[/]"
+                seven_d_line = "[yellow]unknown[/] [grey40](no token)[/]"
+                api_tag_line = "[grey40]set TOKEN in .env for live limits[/]"
+            elif err:
+                five_h_line = "[red]unknown[/] [grey40](auth/fetch error)[/]"
+                seven_d_line = "[red]unknown[/] [grey40](auth/fetch error)[/]"
+                retry_s = self.engine.claude_api.retry_after_seconds
+                if "429" in err and retry_s > 0:
+                    api_tag_line = f"[red]HTTP 429: retry in {retry_s}s[/]"
+                else:
+                    api_tag_line = f"[red]{err}[/]"
+            else:
+                five_h_line = "[yellow]unknown[/] [grey40](loading...)[/]"
+                seven_d_line = "[yellow]unknown[/] [grey40](loading...)[/]"
+                api_tag_line = "[grey40]token loaded; waiting first API fetch[/]"
 
-        claude_block = (
+        self.query_one("#claude_panel", Static).update(
             "[bold magenta]CLAUDE[/]\n"
             f"plan: [white]{claude_account.get('organization_type', 'unknown')}[/]\n"
             f"5h     {five_h_line}\n"
@@ -196,28 +246,30 @@ class AiMeterTui(App[None]):
             f"{api_tag_line}\n"
             f"tokens (last): [white]{claude_total if claude_total is not None else 'unknown'}[/]\n"
             f"source: [cyan]{claude_src}[/] | acc: [cyan]{claude_acc}[/]\n"
-            f"activity: {render_sparkline(claude_vals, width=46)}\n"
+            f"activity: {render_sparkline(claude_vals, width=40)}\n"
             f"samples: {len(snap.claude_usage)}"
         )
-        codex_block = (
+
+        self.query_one("#codex_panel", Static).update(
             "[bold dodger_blue1]CODEX[/]\n"
             f"plan: [white]{codex_limits.get('plan_type', 'unknown')}[/]\n"
             f"5h     {self._render_limit_line(codex_limits, 'primary')}\n"
             f"weekly {self._render_limit_line(codex_limits, 'secondary')}\n"
             f"tokens (last): [white]{codex_total if codex_total is not None else 'unknown'}[/]\n"
             f"source: [cyan]{codex_src}[/] | acc: [cyan]{codex_acc}[/]\n"
-            f"activity: {render_sparkline(codex_vals, width=46)}\n"
+            f"activity: {render_sparkline(codex_vals, width=40)}\n"
             f"samples: {len(snap.codex_usage)}"
         )
-        self.query_one("#claude_panel", Static).update(claude_block)
-        self.query_one("#codex_panel", Static).update(codex_block)
 
-        system_block = self._render_system(snap.system_meta)
-        self.query_one("#system", Static).update(system_block)
+        # --- System stats (bottom-right top) ---
+        self.query_one("#system", Static).update(
+            self._render_system_stats(snap.system_meta)
+        )
 
+        # --- Live activity (bottom-right bottom) ---
         events_text = ["[bold wheat1]LIVE ACTIVITY[/]"]
         for row in snap.recent_events[:14]:
-            ts = str(row.get("timestamp", ""))[11:19]
+            ts = self._format_event_time(row.get("timestamp"))
             provider = str(row.get("provider", "?"))
             etype = str(row.get("event_type", "?"))
             msg = str(row.get("message") or row.get("title") or "")
@@ -230,11 +282,33 @@ class AiMeterTui(App[None]):
             events_text.append("[grey40]waiting for local Claude/Codex activity...[/]")
         self.query_one("#events", Static).update("\n".join(events_text))
 
-    def _render_system(self, meta: dict[str, Any]) -> str:
+    def _render_cpu_details(self, meta: dict[str, Any]) -> str:
+        if not meta:
+            return "[bold cyan]CPU[/]\n[grey50]no data yet[/]"
+
+        cpu = float(meta.get("cpu_percent", 0.0))
+        cpu_name = str(meta.get("cpu_name", "CPU"))
+        cpu_freq_mhz = meta.get("cpu_freq_mhz")
+        core_loads = meta.get("core_loads") or []
+        metrics_source = str(meta.get("metrics_source", ""))
+
+        cpu_color = cpu_gradient_color(cpu)
+        freq_str = (
+            f"[grey60]{cpu_freq_mhz / 1000:.1f} GHz[/]  " if cpu_freq_mhz else ""
+        )
+
+        lines = [
+            f"[bold white]{cpu_name}[/]  {freq_str}[{cpu_color}]{cpu:.1f}%[/]  [grey40]{metrics_source}[/]",
+            f"CPU  {render_bar(cpu, 22)}",
+        ]
+        if core_loads:
+            lines.append(render_core_grid(core_loads, cols=2))
+        return "\n".join(lines)
+
+    def _render_system_stats(self, meta: dict[str, Any]) -> str:
         if not meta:
             return "[bold green]SYSTEM[/]\n[grey50]no data yet[/]"
 
-        cpu = float(meta.get("cpu_percent", 0.0))
         ram = float(meta.get("ram_percent", 0.0))
         disk = float(meta.get("disk_percent", 0.0))
         cpu_temp = meta.get("cpu_temp_c")
@@ -242,57 +316,62 @@ class AiMeterTui(App[None]):
         gpu_temp = meta.get("gpu_temp_c")
         gpu_name = str(meta.get("gpu_name") or "GPU")
         needs_admin = bool(meta.get("needs_admin"))
-        net_up = meta.get("net_sent_mb", 0.0)
-        net_dn = meta.get("net_recv_mb", 0.0)
+        net_up = float(meta.get("net_sent_mb", 0.0))
+        net_dn = float(meta.get("net_recv_mb", 0.0))
         top = meta.get("top_processes", [])
-        metrics_source = str(meta.get("metrics_source", "unknown"))
-        core_loads = meta.get("core_loads") or []
 
-        # CPU temperature line
+        # CPU temperature bar (100°C = critical)
         if isinstance(cpu_temp, (int, float)):
-            temp_color = "spring_green2" if cpu_temp < 70 else ("yellow1" if cpu_temp < 90 else "red1")
-            cpu_temp_str = f"[{temp_color}]{cpu_temp:.1f}°C[/] [grey50]({temp_source})[/]"
+            cpu_temp_str = render_temp_bar(cpu_temp, max_temp=100.0, width=16) + f" [grey50]({temp_source})[/]"
         elif needs_admin:
-            cpu_temp_str = "[yellow]unknown[/] [grey40](run as admin for CPU temp)[/]"
+            cpu_temp_str = "[grey50]── needs admin ──[/]"
         else:
             cpu_temp_str = f"[grey50]unknown ({temp_source})[/]"
 
-        # GPU temperature line
+        # GPU temperature bar
+        gpu_label = gpu_name.split()[-1] if gpu_name else "GPU"
         if isinstance(gpu_temp, (int, float)):
-            gpu_color = "spring_green2" if gpu_temp < 70 else ("yellow1" if gpu_temp < 90 else "red1")
-            gpu_label = gpu_name.split()[-1] if gpu_name else "GPU"
-            gpu_str = f"[{gpu_color}]{gpu_temp:.1f}°C[/] [grey50]({gpu_label})[/]"
+            gpu_temp_str = render_temp_bar(gpu_temp, max_temp=100.0, width=16) + f" [grey50]({gpu_label})[/]"
         else:
-            gpu_str = "[grey50]N/A[/]"
+            gpu_temp_str = "[grey50]N/A[/]"
+
+        # Network — pick unit automatically
+        def _fmt_net(mb: float) -> str:
+            return f"{mb / 1024:.1f}GB" if mb >= 1024 else f"{mb:.1f}MB"
 
         lines = [
-            f"[bold green]SYSTEM[/] [grey40]{metrics_source}[/]",
-            f"cpu  {render_bar(cpu, 20)}",
-        ]
-
-        # Per-core grid (2-column btop style)
-        if core_loads:
-            core_grid = render_core_grid(core_loads, cols=2)
-            if core_grid:
-                lines.append(core_grid)
-
-        lines += [
+            "[bold green]SYSTEM[/]",
             f"ram  {render_bar(ram, 20)}",
             f"disk {render_bar(disk, 20)}",
             f"temp {cpu_temp_str}",
-            f"gpu  {gpu_str}",
-            f"net  [cyan]↑[/]{net_up:.1f}MB  [cyan]↓[/]{net_dn:.1f}MB",
+            f"gpu  {gpu_temp_str}",
+            f"net  [#00ddcc]↑[/]{_fmt_net(net_up)}  [#ff8800]↓[/]{_fmt_net(net_dn)}",
             "processes:",
         ]
         for p in top[:5]:
             name = str(p.get("name", "?"))[:22]
+            mem = float(p.get("mem_mb", 0))
+            mem_color = cpu_gradient_color(min(100, mem / 2))  # 200 MB ≈ warm
             lines.append(
-                f"  [grey70]{name:<22}[/] mem=[yellow]{p.get('mem_mb', 0):>7.1f}MB[/]"
+                f"  [grey70]{name:<22}[/] mem=[{mem_color}]{mem:>7.1f}MB[/]"
             )
         return "\n".join(lines)
 
+    def _format_event_time(self, raw: Any) -> str:
+        text = str(raw or "").strip()
+        if not text:
+            return "--:--:--"
+        try:
+            dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc).astimezone()
+            else:
+                dt = dt.astimezone()
+            return dt.strftime("%H:%M:%S")
+        except Exception:
+            return text[11:19] if len(text) >= 19 else text
+
     def _render_api_limit(self, pct: float | None, reset_secs: int | None) -> str:
-        """Render a Claude API usage limit bar with reset countdown."""
         if pct is None:
             return "[yellow]unknown[/]"
         reset_text = self._format_reset_seconds(reset_secs)

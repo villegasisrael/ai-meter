@@ -165,6 +165,8 @@ def run() -> None:
 
     persist_db = Database(paths.db_file) if config.app.persist_history else None
     offset_store = persist_db if persist_db is not None else MemoryOffsetStore()
+    import os as _os
+    _os.environ.setdefault("TEXTUAL_COLOR_SYSTEM", "truecolor")
     engine = MonitorEngine(config=config, paths=paths, offset_store=offset_store, db=persist_db)
     app = AiMeterTui(engine)
     app.run()

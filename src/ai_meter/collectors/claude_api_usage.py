@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import time
+import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,6 +23,7 @@ class ClaudeApiUsageCollector:
         # token = full Authorization header value, e.g. "Bearer sk-ant-oat01--..."
         self._token = token
         self._last_fetch_mono = 0.0
+        self._next_retry_mono = 0.0
         self._cached: dict[str, Any] | None = None
         self._parsed: ParsedUsage | None = None
         self._last_error: str | None = None
@@ -49,10 +51,18 @@ class ClaudeApiUsageCollector:
         return self._last_error
 
     def is_due(self) -> bool:
-        return time.monotonic() - self._last_fetch_mono >= _CACHE_SECONDS
+        now = time.monotonic()
+        if now < self._next_retry_mono:
+            return False
+        return now - self._last_fetch_mono >= _CACHE_SECONDS
+
+    @property
+    def retry_after_seconds(self) -> int:
+        remaining = int(self._next_retry_mono - time.monotonic())
+        return max(0, remaining)
 
     def fetch_if_due(self) -> ParsedUsage | None:
-        if not self.is_due() and self._parsed is not None:
+        if not self.is_due():
             return self._parsed
         return self._do_fetch()
 
@@ -75,8 +85,17 @@ class ClaudeApiUsageCollector:
             self._cached = data
             self._parsed = ParsedUsage.from_api(data)
             self._last_fetch_mono = time.monotonic()
+            self._next_retry_mono = 0.0
             self._last_error = None
             return self._parsed
+        except urllib.error.HTTPError as exc:
+            if exc.code == 429:
+                retry_after = _parse_retry_after_seconds(exc.headers.get("Retry-After"))
+                self._next_retry_mono = time.monotonic() + retry_after
+                self._last_error = f"HTTP 429: Too Many Requests (retry in {retry_after}s)"
+            else:
+                self._last_error = f"HTTP Error {exc.code}: {exc.reason}"
+            return self._parsed  # return stale on error
         except Exception as exc:
             self._last_error = str(exc)[:120]
             return self._parsed  # return stale on error
@@ -150,3 +169,11 @@ def _parse_token_from_env(path: Path) -> str | None:
         return None
     except Exception:
         return None
+
+
+def _parse_retry_after_seconds(value: Any) -> int:
+    try:
+        seconds = int(str(value).strip())
+    except (TypeError, ValueError):
+        return 300
+    return max(60, min(1800, seconds))

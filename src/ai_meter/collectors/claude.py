@@ -188,6 +188,11 @@ class ClaudeCollector(Collector):
         return out
 
     def _load_account_meta(self) -> dict[str, Any]:
+        credentials_file = self.paths.claude_home / ".credentials.json"
+        credentials_meta = self._load_credentials_account_meta(credentials_file)
+        if credentials_meta:
+            return credentials_meta
+
         backup_dir = self.paths.claude_home / "backups"
         backup_files = sorted(backup_dir.glob(".claude.json.backup.*"), reverse=True)
         if not backup_files:
@@ -206,6 +211,31 @@ class ClaudeCollector(Collector):
                 "organization_type": oauth.get("organizationType"),
                 "organization_rate_limit_tier": oauth.get("organizationRateLimitTier"),
                 "has_extra_usage_enabled": oauth.get("hasExtraUsageEnabled"),
+                "source": "claude_backup",
+            }
+        }
+
+    def _load_credentials_account_meta(self, path: Path) -> dict[str, Any]:
+        if not path.exists():
+            return {}
+        try:
+            obj = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
+        except json.JSONDecodeError:
+            return {}
+        if not isinstance(obj, dict):
+            return {}
+        oauth = obj.get("claudeAiOauth")
+        if not isinstance(oauth, dict):
+            return {}
+
+        subscription = oauth.get("subscriptionType")
+        if not subscription:
+            return {}
+        return {
+            "account": {
+                "organization_type": f"claude_{subscription}",
+                "organization_rate_limit_tier": oauth.get("rateLimitTier"),
+                "source": "claude_credentials",
             }
         }
 

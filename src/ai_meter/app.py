@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from threading import RLock
 from typing import Any
@@ -27,6 +27,7 @@ class DashboardSnapshot:
     codex_usage: list[dict[str, Any]]
     system_meta: dict[str, Any]
     claude_api_usage: ParsedUsage | None = None
+    cpu_history: list[float] = field(default_factory=list)
 
 
 class MonitorEngine:
@@ -56,6 +57,7 @@ class MonitorEngine:
             "claude": deque(maxlen=self.config.ui.sparkline_points),
             "codex": deque(maxlen=self.config.ui.sparkline_points),
         }
+        self._cpu_history: deque[float] = deque(maxlen=600)
 
     def run_claude_api_collection(self) -> None:
         """Fetch Claude usage limits from OAuth API. Rate-limited internally to 60s."""
@@ -100,6 +102,13 @@ class MonitorEngine:
                 name = str(provider_dict["name"])
                 self._provider_rows[name] = provider_dict
                 self._provider_meta[name] = redact_sensitive(dict(batch.provider_status.metadata))
+                if name == "system":
+                    cpu = batch.provider_status.metadata.get("cpu_percent")
+                    if cpu is not None:
+                        try:
+                            self._cpu_history.append(float(cpu))
+                        except (TypeError, ValueError):
+                            pass
 
             for event in batch.events:
                 event_dict = event.model_dump(mode="json")
@@ -149,4 +158,5 @@ class MonitorEngine:
                 codex_usage=list(self._usage_rows["codex"]),
                 system_meta=dict(system_meta),
                 claude_api_usage=self._claude_api_usage,
+                cpu_history=list(self._cpu_history),
             )

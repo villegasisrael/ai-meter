@@ -30,6 +30,9 @@ class SystemCollector(Collector):
 
     def __init__(self) -> None:
         self._native_sampler = NativeWinProbeSampler()
+        self._cpu_name: str = self._get_cpu_name()
+        self._cached_cpu_freq_mhz: float | None = None
+        self._last_cpu_freq_read_at = 0.0
         self._last_probe_read_at = 0.0
         self._cached_cpu_temp_c: float | None = None
         self._cached_cpu_temp_source: str = "unknown"
@@ -40,6 +43,7 @@ class SystemCollector(Collector):
         self._last_temp_probe_meta: dict[str, Any] = {}
         self._last_top_read_at = 0.0
         self._cached_top_processes: list[dict[str, Any]] = []
+        self._prev_cpu_times_per_core: list[Any] | None = None
 
     def probe(self) -> ProviderStatus:
         return ProviderStatus(
@@ -51,7 +55,12 @@ class SystemCollector(Collector):
             metadata={"available": psutil is not None},
         )
 
-    def collect(self, include_temp: bool = True, include_top: bool = True) -> CollectBatch:
+    def collect(
+        self,
+        include_temp: bool = True,
+        include_top: bool = True,
+        include_core_loads: bool = True,
+    ) -> CollectBatch:
         batch = CollectBatch(provider_status=self.probe())
         if psutil is None:
             return batch
@@ -97,6 +106,8 @@ class SystemCollector(Collector):
         )
         if include_temp:
             self._refresh_sensor_probe()
+        elif include_core_loads:
+            self._refresh_core_loads_fast()
 
         meta: dict[str, Any] = snapshot.model_dump(mode="json")
         meta["metrics_source"] = metrics_source
@@ -108,8 +119,87 @@ class SystemCollector(Collector):
         meta["gpu_name"] = self._cached_gpu_name
         meta["core_loads"] = list(self._cached_core_loads)
         meta["needs_admin"] = self._cached_needs_admin
+        meta["cpu_name"] = self._cpu_name
+        meta["cpu_freq_mhz"] = self._cpu_freq_mhz()
         batch.provider_status.metadata = meta
         return batch
+
+    def _cpu_freq_mhz(self) -> float | None:
+        if psutil is None:
+            return None
+        now = time.monotonic()
+        if self._cached_cpu_freq_mhz is not None and (now - self._last_cpu_freq_read_at) < 2.0:
+            return self._cached_cpu_freq_mhz
+        self._last_cpu_freq_read_at = now
+        try:
+            freq = psutil.cpu_freq()
+            if freq is None:
+                return self._cached_cpu_freq_mhz
+            self._cached_cpu_freq_mhz = round(float(freq.current), 0)
+        except Exception:
+            return self._cached_cpu_freq_mhz
+        return self._cached_cpu_freq_mhz
+
+    def _get_cpu_name(self) -> str:
+        try:
+            import winreg
+            key = winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE,
+                r"HARDWARE\DESCRIPTION\System\CentralProcessor\0",
+            )
+            name, _ = winreg.QueryValueEx(key, "ProcessorNameString")
+            winreg.CloseKey(key)
+            name = str(name).strip()
+            for suffix in (" with Radeon Graphics", " with Radeon Vega", " APU"):
+                name = name.replace(suffix, "")
+            return name
+        except Exception:
+            try:
+                import platform
+                return platform.processor()[:40]
+            except Exception:
+                return "CPU"
+
+    def _refresh_core_loads_fast(self) -> None:
+        """Refresh per-core loads from cpu_times deltas on the light loop cadence."""
+        if psutil is None:
+            return
+        try:
+            current_times = list(psutil.cpu_times(percpu=True))
+        except Exception:
+            return
+        if not current_times:
+            return
+
+        previous_times = self._prev_cpu_times_per_core
+        self._prev_cpu_times_per_core = current_times
+        if previous_times is None or len(previous_times) != len(current_times):
+            return
+
+        core_loads: list[dict[str, Any]] = []
+        for idx, (prev, cur) in enumerate(zip(previous_times, current_times), start=1):
+            try:
+                prev_total = float(sum(prev))
+                cur_total = float(sum(cur))
+                delta_total = cur_total - prev_total
+                if delta_total <= 0.0:
+                    continue
+
+                prev_idle = float(getattr(prev, "idle", 0.0)) + float(getattr(prev, "iowait", 0.0))
+                cur_idle = float(getattr(cur, "idle", 0.0)) + float(getattr(cur, "iowait", 0.0))
+                delta_idle = max(0.0, cur_idle - prev_idle)
+                value = ((delta_total - delta_idle) / delta_total) * 100.0
+            except (TypeError, ValueError):
+                continue
+            value = max(0.0, min(100.0, value))
+            core_loads.append(
+                {
+                    "name": f"CPU Core #{idx}",
+                    "load_percent": value,
+                }
+            )
+        if core_loads:
+            self._cached_core_loads = core_loads
 
     def _top_processes(self) -> list[dict[str, Any]]:
         now = time.monotonic()
