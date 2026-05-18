@@ -157,7 +157,7 @@ class AiMeterTui(App[None]):
         self._render_snapshot(force=True)
 
     def action_help(self) -> None:
-        self.notify("keys: q r p c x -/+ h 1-7  |  run as admin for CPU temp")
+        self.notify("keys: q r p c x -/+ h 1-7")
 
     def action_toggle_claude(self) -> None:
         if not self.engine.provider_enabled("claude"):
@@ -401,7 +401,7 @@ class AiMeterTui(App[None]):
         if isinstance(cpu_temp, (int, float)):
             cpu_temp_str = render_temp_bar(cpu_temp, max_temp=100.0, width=16) + f" [grey50]({temp_source})[/]"
         elif needs_admin:
-            cpu_temp_str = "[grey50]── needs admin ──[/]"
+            cpu_temp_str = "[grey50]driver blocked[/]"
         else:
             cpu_temp_str = f"[grey50]unknown ({temp_source})[/]"
 

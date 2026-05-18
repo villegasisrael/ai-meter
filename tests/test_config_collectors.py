@@ -2,8 +2,10 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from ai_meter.collectors.claude import ClaudeCollector
+from ai_meter.collectors.system import SystemCollector
 from ai_meter.config import AppConfig, ConfigManager
 from ai_meter.paths import AppPaths
 from ai_meter.runtime_store import MemoryOffsetStore
@@ -27,6 +29,7 @@ class ConfigCollectorTests(unittest.TestCase):
         self.assertTrue(config.providers.claude.enabled)
         self.assertFalse(config.providers.claude.usage_api_enabled)
         self.assertGreaterEqual(config.providers.claude.usage_api_interval_s, 60)
+        self.assertFalse(config.app.sensor_probe_enabled)
 
     def test_config_round_trip_keeps_provider_flags(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -42,6 +45,22 @@ class ConfigCollectorTests(unittest.TestCase):
             self.assertFalse(loaded.providers.codex.enabled)
             self.assertTrue(loaded.providers.claude.usage_api_enabled)
             self.assertEqual(loaded.providers.claude.usage_api_interval_s, 1200)
+            self.assertFalse(loaded.app.sensor_probe_enabled)
+
+    def test_system_collector_does_not_run_sensor_probe_by_default(self) -> None:
+        collector = SystemCollector(sensor_probe_enabled=False)
+
+        def fail_probe() -> dict[str, object]:
+            raise AssertionError("sensor probe should not run by default")
+
+        collector._run_sensor_probe = fail_probe  # type: ignore[method-assign]
+        with patch.object(collector, "_read_wmi_temp_fallback", return_value=(None, "wmi:no_data")):
+            collector._refresh_sensor_probe()
+
+        self.assertEqual(
+            collector._last_temp_probe_meta.get("error"),
+            "sensor_probe_disabled",
+        )
 
     def test_claude_collector_reads_initial_tail_once(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

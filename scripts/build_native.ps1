@@ -1,3 +1,7 @@
+param(
+    [switch]$IncludeSensorProbe
+)
+
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $out = Join-Path $root 'src\ai_meter\bin\win-x64'
@@ -6,8 +10,12 @@ New-Item -ItemType Directory -Force $out | Out-Null
 # Kill any running sensor-probe instances so the dll isn't locked during copy
 Stop-Process -Name 'ai-meter-sensor-probe' -Force -ErrorAction SilentlyContinue
 
-Write-Host 'Building bundled LibreHardwareMonitor sensor probe...'
-dotnet publish (Join-Path $root 'native\AiMeter.SensorProbe\AiMeter.SensorProbe.csproj') -c Release -r win-x64 --self-contained false -o $out
+if ($IncludeSensorProbe) {
+    Write-Host 'Building legacy LibreHardwareMonitor sensor probe...'
+    dotnet publish (Join-Path $root 'native\AiMeter.SensorProbe\AiMeter.SensorProbe.csproj') -c Release -r win-x64 --self-contained false -o $out
+} else {
+    Write-Host 'Skipping legacy LibreHardwareMonitor sensor probe.'
+}
 
 $gpp = Get-Command g++ -ErrorAction SilentlyContinue
 if ($gpp) {

@@ -18,18 +18,24 @@ try:
 except ModuleNotFoundError:  # pragma: no cover
     psutil = None  # type: ignore
 
-# Written by the background scheduled task (runs as SYSTEM, no UAC needed after install)
+# Legacy output path from the disabled LibreHardwareMonitor sensor task.
 _SERVICE_FILE = (
     Path(os.environ.get("ProgramData", r"C:\ProgramData")) / "ai-meter" / "sensor.json"
 )
 _SERVICE_FILE_MAX_AGE_S = 30.0  # ignore if older than this
+_UNSAFE_SENSOR_PROBE_ENV = "AI_METER_ALLOW_VULNERABLE_SENSOR_PROBE"
 
 
 class SystemCollector(Collector):
     name = "system"
 
-    def __init__(self, winprobe_interval_ms: int = 250) -> None:
+    def __init__(
+        self,
+        winprobe_interval_ms: int = 250,
+        sensor_probe_enabled: bool = False,
+    ) -> None:
         self._native_sampler = NativeWinProbeSampler(winprobe_interval_ms)
+        self._sensor_probe_enabled = bool(sensor_probe_enabled)
         self._cpu_name: str = self._get_cpu_name()
         self._cached_cpu_freq_mhz: float | None = None
         self._last_cpu_freq_read_at = 0.0
@@ -112,6 +118,8 @@ class SystemCollector(Collector):
         meta: dict[str, Any] = snapshot.model_dump(mode="json")
         meta["metrics_source"] = metrics_source
         meta["native_winprobe"] = self._native_sampler.status()
+        meta["sensor_probe_enabled"] = self._sensor_probe_enabled
+        meta["sensor_probe_runtime_allowed"] = _unsafe_sensor_probe_allowed()
         meta["cpu_temp_c"] = self._cached_cpu_temp_c
         meta["cpu_temp_source"] = self._cached_cpu_temp_source
         meta["cpu_temp_probe"] = dict(self._last_temp_probe_meta)
@@ -237,8 +245,25 @@ class SystemCollector(Collector):
             return
         self._last_probe_read_at = now
 
-        # Prefer the service file (written by background task running as SYSTEM)
-        obj = self._read_service_file() or self._run_sensor_probe()
+        obj: dict[str, Any] | None = None
+        if self._sensor_probe_enabled and _unsafe_sensor_probe_allowed():
+            # Prefer the service file (written by the legacy background task)
+            obj = self._read_service_file() or self._run_sensor_probe()
+        else:
+            self._last_temp_probe_meta = {
+                "available": False,
+                "source": "sensor_probe:disabled",
+                "sensor_count": 0,
+                "needs_admin": False,
+                "from_service": False,
+                "service_file_present": _SERVICE_FILE.exists(),
+                "error": (
+                    "unsafe_sensor_probe_env_required"
+                    if self._sensor_probe_enabled
+                    else "sensor_probe_disabled"
+                ),
+            }
+
         if obj is None:
             # Fallback: try WMI for CPU temp only
             wmi_temp, wmi_source = self._read_wmi_temp_fallback()
@@ -291,7 +316,7 @@ class SystemCollector(Collector):
             self._cached_core_loads = []
 
     def _read_service_file(self) -> dict[str, Any] | None:
-        """Read sensor data written by the background scheduled task (no admin needed)."""
+        """Read sensor data written by the legacy background scheduled task."""
         try:
             if not _SERVICE_FILE.exists():
                 return None
@@ -469,6 +494,11 @@ def _shorten_source(source: str) -> str:
     for long, short in replacements.items():
         source = source.replace(long, short)
     return source
+
+
+def _unsafe_sensor_probe_allowed() -> bool:
+    value = os.environ.get(_UNSAFE_SENSOR_PROBE_ENV, "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
 
 
 def _find_bundled_tool(name: str) -> Path | None:

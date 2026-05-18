@@ -1,63 +1,16 @@
 # Operacion
 
-## Instalacion de desarrollo
-
-```powershell
-git clone <repo-url>
-cd ai-meter
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -U pip
-pip install -e .
-```
-
 ## Ejecucion
 
 ```powershell
+$env:PYTHONPATH='src'
 python -m ai_meter.main run
 ```
 
-Si instalaste el entrypoint:
+Con entrypoint instalado:
 
 ```powershell
 ai-meter run
-```
-
-## Proveedores
-
-Editar el config mostrado por `python -m ai_meter.main paths`:
-
-```toml
-[providers.codex]
-enabled = true
-
-[providers.claude]
-enabled = true
-usage_api_enabled = false
-usage_api_interval_s = 900
-```
-
-Para mostrar solo Claude, poner `providers.codex.enabled=false`. Para mostrar solo Codex, poner `providers.claude.enabled=false`.
-
-En la TUI tambien se puede ocultar/mostrar temporalmente cada panel sin cambiar config:
-`c` alterna Claude y `x` alterna Codex.
-
-## Performance
-
-Config recomendada por defecto:
-
-```toml
-[app]
-refresh_interval_ms = 1000
-collector_light_interval_ms = 250
-collector_heavy_interval_s = 10
-winprobe_interval_ms = 250
-
-[ui]
-cpu_render_interval_ms = 250
-system_render_interval_ms = 500
-ai_render_interval_ms = 1000
-events_render_interval_ms = 500
 ```
 
 ## Diagnostico
@@ -67,60 +20,35 @@ python -m ai_meter.main doctor
 python -m ai_meter.main paths
 ```
 
-`doctor` debe confirmar:
+`doctor` debe mostrar:
 
-- rutas de config/data
-- proveedores habilitados y estado de Claude usage API
+- config/data paths
+- proveedores habilitados
+- estado de Claude usage API
 - homes de Codex/Claude
 - fuente de metricas sistema
-- estado del sensor probe
-- temperatura CPU/GPU si existe
-- cores detectados
+- temperatura como valor real o `unknown`
 
-## Servicio de temperatura
+## Limpieza legacy
 
-Instalar como administrador:
+`install-service` esta deshabilitado. No instalar servicios ni drivers para temperatura.
 
-```powershell
-python -m ai_meter.main install-service
-```
-
-Esto registra tarea `ai-meter-sensor` al logon del usuario actual con RunLevel Highest y escribe:
-
-```text
-C:\ProgramData\ai-meter\sensor.json
-```
-
-Desinstalar como administrador:
+Si existe una instalacion anterior del sensor:
 
 ```powershell
 python -m ai_meter.main uninstall-service
 ```
 
-## Build nativo
+Ejecutar como administrador. El comando elimina la tarea `ai-meter-sensor`, el servicio `WinRing0_1_2_0` y archivos legacy conocidos.
+
+## Build
 
 ```powershell
 .\scripts\build_native.ps1
-```
-
-Requiere:
-
-- .NET 6 SDK
-- g++/MinGW si se quiere recompilar `ai-meter-winprobe.exe`
-
-El output final que usa Python esta en:
-
-```text
-src\ai_meter\bin\win-x64
-```
-
-## Build EXE
-
-```powershell
 .\scripts\build_exe.ps1
 ```
 
-Usa PyInstaller y agrega binarios nativos. Revisar tamano final si se modifica `--collect-all`.
+`build_native.ps1` recompila `ai-meter-winprobe.exe` si hay `g++`.
 
 ## Pruebas
 
@@ -129,5 +57,3 @@ $env:PYTHONPATH='src'
 python -m unittest discover -s tests
 python -m compileall src\ai_meter
 ```
-
-Si se usa `.venv\Scripts\python.exe`, instalar dependencias de test si faltan.

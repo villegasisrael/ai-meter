@@ -8,6 +8,15 @@ $ErrorActionPreference = 'Stop'
 
 & $Python -m pip install pyinstaller
 $nativeBin = Resolve-Path ".\src\ai_meter\bin\win-x64"
-& $Python -m PyInstaller --onefile --name ai-meter --collect-all textual --collect-all rich --add-data "$nativeBin;ai_meter/bin/win-x64" -m ai_meter.main
+$winprobe = Join-Path $nativeBin 'ai-meter-winprobe.exe'
+$pyInstallerArgs = @(
+  '--onefile',
+  '--name', 'ai-meter',
+  '--collect-all', 'textual',
+  '--collect-all', 'rich',
+  '--add-data', "$winprobe;ai_meter/bin/win-x64",
+  '-m', 'ai_meter.main'
+)
+& $Python -m PyInstaller @pyInstallerArgs
 
 Write-Host 'EXE generado en .\dist\ai-meter.exe'

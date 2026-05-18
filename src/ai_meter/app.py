@@ -54,7 +54,8 @@ class MonitorEngine:
             else None
         )
         self.system_collector = SystemCollector(
-            winprobe_interval_ms=self.config.app.winprobe_interval_ms
+            winprobe_interval_ms=self.config.app.winprobe_interval_ms,
+            sensor_probe_enabled=self.config.app.sensor_probe_enabled,
         )
         self.claude_api = (
             ClaudeApiUsageCollector.from_env_file(

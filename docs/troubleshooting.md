@@ -1,13 +1,34 @@
 # Troubleshooting
 
+## Diagnostico base
+
+```powershell
+python -m ai_meter.main doctor
+python -m ai_meter.main paths
+```
+
+## Anti-Tampering / `ai-meter-sensor-probe.sys`
+
+Ese archivo viene del sensor legacy LibreHardwareMonitor/WinRing0 usado por versiones anteriores para temperatura. Ya no es una ruta soportada.
+
+Limpiar como administrador:
+
+```powershell
+python -m ai_meter.main uninstall-service
+Remove-Item "$env:ProgramData\ai-meter\sensor.json" -Force -ErrorAction SilentlyContinue
+Remove-Item ".\src\ai_meter\bin\win-x64\ai-meter-sensor-probe.sys" -Force -ErrorAction SilentlyContinue
+```
+
+No desactivar Memory Integrity/HVCI para ai-meter. La temperatura debe caer a `unknown` si no hay fuente segura.
+
 ## Codex muestra plan viejo
 
-Prioridad correcta:
+Prioridad:
 
 1. `~/.codex/sessions/**/*.jsonl` con `payload.rate_limits.plan_type`
-2. `~/.codex/logs_2.sqlite` como fallback
+2. `~/.codex/logs_2.sqlite`
 
-Si muestra `plus` estando en `pro`, revisar:
+Snippet:
 
 ```powershell
 $env:PYTHONPATH='src'
@@ -21,47 +42,21 @@ print(rl)
 '@ | python -
 ```
 
-Si `source` es `logs_sqlite`, probablemente no hay JSONL reciente con `rate_limits`.
-
-## Claude plan unknown
+## Claude unknown
 
 Revisar:
 
 - `~/.claude/.credentials.json`
 - `~/.claude/backups/.claude.json.backup.*`
-
-El collector no debe imprimir tokens ni secretos.
-
-## Claude tokens/activity unknown
-
-Revisar:
-
 - `~/.claude/projects/**/*.jsonl`
 - `~/.claude/stats-cache.json`
 
-El primer ciclo lee una cola reciente de JSONL y luego usa offsets. Si no hay muestras, probablemente Claude no ha escrito uso local en esos archivos.
+## Claude API 401/429
 
-## Claude API 401
+- `401`: token OAuth invalido o expirado.
+- `429`: rate limit; el collector aplica backoff.
 
-La API debe estar habilitada con `providers.claude.usage_api_enabled=true`. Si el `.env` existe pero el token no es valido o expiro, reemplazar `TOKEN`.
-
-Formato:
-
-```text
-TOKEN = Bearer sk-ant-oat01--...
-```
-
-## Claude API 429
-
-La API rate-limito la consulta. El collector respeta `Retry-After` o usa 300s por defecto. Esto no bloquea los datos locales observados; solo deja los limites 5h/semanal en `unknown` si no hay cache previo.
-
-La UI debe mostrar algo como:
-
-```text
-HTTP 429: retry in 123s
-```
-
-Para evitar depender de esa API:
+Para no depender de esa API:
 
 ```toml
 [providers.claude]
@@ -70,39 +65,14 @@ usage_api_enabled = false
 
 ## CPU cores en 0
 
-No usar `psutil.cpu_percent(interval=0.0, percpu=True)` como fuente principal de cores en hilos nuevos.
-
-La implementacion correcta usa delta de:
+La fuente correcta es delta de:
 
 ```python
 psutil.cpu_times(percpu=True)
 ```
 
+No usar `psutil.cpu_percent(interval=0.0, percpu=True)` como fuente principal en hilos nuevos.
+
 ## Hora de eventos incorrecta
 
-Los timestamps de eventos suelen venir en UTC. La UI debe convertirlos a hora local antes de renderizar.
-
-## CPU temp unknown
-
-Ejecutar:
-
-```powershell
-python -m ai_meter.main doctor
-```
-
-Casos comunes:
-
-- `needs_admin`: falta instalar servicio.
-- `from_service=false`: no hay `C:\ProgramData\ai-meter\sensor.json` vigente.
-- `INVALID_IMAGE_HASH`: Memory Integrity/HVCI puede bloquear el driver.
-- `wmi:acpi`: fallback, no siempre confiable.
-
-## UI sin colores truecolor
-
-`main.run()` define:
-
-```text
-TEXTUAL_COLOR_SYSTEM=truecolor
-```
-
-Si se ejecuta la TUI de otra forma, puede faltar color truecolor.
+Los timestamps suelen venir en UTC. La UI debe convertirlos a hora local antes de renderizar.

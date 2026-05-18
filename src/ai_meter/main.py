@@ -72,7 +72,8 @@ def doctor() -> None:
     table.add_row("claude stats-cache.json", str((claude_home / "stats-cache.json").exists()).lower())
 
     system_batch = SystemCollector(
-        winprobe_interval_ms=config.app.winprobe_interval_ms
+        winprobe_interval_ms=config.app.winprobe_interval_ms,
+        sensor_probe_enabled=config.app.sensor_probe_enabled,
     ).collect(include_temp=True, include_top=False)
     system_meta = system_batch.provider_status.metadata if system_batch.provider_status else {}
     native_status = system_meta.get("native_winprobe", {}) if isinstance(system_meta, dict) else {}
@@ -86,13 +87,14 @@ def doctor() -> None:
     from_service = bool(temp_probe.get("from_service")) if isinstance(temp_probe, dict) else False
     table.add_row("system metrics_source", str(system_meta.get("metrics_source", "unknown")))
     table.add_row("native winprobe", json.dumps(native_status, ensure_ascii=False))
+    table.add_row("sensor probe enabled", str(config.app.sensor_probe_enabled).lower())
     table.add_row("sensor probe", json.dumps(temp_probe, ensure_ascii=False))
     if temp_c is not None:
         cpu_temp_str = f"{temp_c} C ({temp_source})"
     elif needs_admin and from_service:
-        cpu_temp_str = f"unknown ({temp_source}) — driver blocked (HVCI?); run install-service as admin"
+        cpu_temp_str = f"unknown ({temp_source}) - driver blocked"
     elif needs_admin:
-        cpu_temp_str = f"unknown ({temp_source}) — run install-service as Administrator"
+        cpu_temp_str = f"unknown ({temp_source}) - sensor probe disabled"
     else:
         cpu_temp_str = f"unknown ({temp_source})"
     table.add_row("cpu temp", cpu_temp_str)
@@ -184,100 +186,21 @@ def run() -> None:
 
 @cli.command("install-service")
 def install_service() -> None:
-    """Install background sensor task for CPU temperature (requires admin, run ONCE)."""
+    """Deprecated: legacy sensor task used a vulnerable kernel driver."""
     if os.name != "nt":
         console.print("[red]Only supported on Windows.[/]")
         raise typer.Exit(code=1)
 
-    if not ctypes.windll.shell32.IsUserAnAdmin():
-        console.print("[red]This command requires Administrator.[/]")
-        console.print("Right-click PowerShell → 'Run as Administrator', then run again:")
-        console.print("  [bold]python -m ai_meter.main install-service[/]")
-        raise typer.Exit(code=1)
-
-    from ai_meter.collectors.system import _find_bundled_tool
-    probe_exe = _find_bundled_tool("ai-meter-sensor-probe.exe")
-    if probe_exe is None:
-        console.print("[red]ai-meter-sensor-probe.exe not found. Run scripts/build_native.ps1 first.[/]")
-        raise typer.Exit(code=1)
-
-    out_dir = Path(os.environ.get("ProgramData", r"C:\ProgramData")) / "ai-meter"
-    out_file = out_dir / "sensor.json"
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    task_name = "ai-meter-sensor"
-    probe_str = str(probe_exe).replace("'", "''")  # escape single quotes for PS
-    out_str = str(out_file).replace("'", "''")
-
-    # Write to a temp .ps1 file to avoid all inline quoting/escaping issues
-    import tempfile
-    ps_lines = [
-        "$ErrorActionPreference = 'Stop'",
-        # Use the current interactive user with RunLevel Highest (S4U = no password stored).
-        # Running as SYSTEM (session 0) blocks LHM's WinRing0x64.sys driver init on Ryzen.
-        "$currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name",
-        f"Unregister-ScheduledTask -TaskName '{task_name}' -Confirm:$false -ErrorAction SilentlyContinue",
-        f"$action    = New-ScheduledTaskAction -Execute '{probe_str}' -Argument '--loop-to \"{out_str}\" 5000'",
-        "$trigger   = New-ScheduledTaskTrigger -AtLogOn -User $currentUser",
-        "$settings  = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Days 3650) -RestartCount 10 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew -StartWhenAvailable",
-        # Interactive = runs in the user's own session (same context as manually running as admin).
-        # S4U runs in session 0 (isolated) which blocks WinRing0x64.sys init on Ryzen/HVCI systems.
-        "$principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Highest",
-        f"Register-ScheduledTask -TaskName '{task_name}' -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null",
-        f"Start-ScheduledTask -TaskName '{task_name}'",
-        "Write-Host 'OK'",
-    ]
-
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".ps1", delete=False, encoding="utf-8"
-    ) as tmp:
-        tmp.write("\n".join(ps_lines))
-        tmp_path = tmp.name
-
-    result = subprocess.run(
-        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", tmp_path],
-        capture_output=True, text=True,
-    )
-    try:
-        Path(tmp_path).unlink()
-    except Exception:
-        pass
-    if result.returncode != 0 or "OK" not in result.stdout:
-        console.print(f"[red]Failed:[/] {result.stderr.strip() or result.stdout.strip()}")
-        raise typer.Exit(code=1)
-
-    # Persist the WinRing0 kernel driver as an auto-start system service.
-    # Task Scheduler's elevated token (even RunLevel Highest) lacks SE_LOAD_DRIVER_PRIVILEGE,
-    # but THIS process (running under the user's full UAC-elevated admin token) can load it.
-    # Once installed as auto-start, future probe runs (any privilege) just open the device handle.
-    console.print("Installing kernel driver for CPU temperature...")
-    driver_result = subprocess.run(
-        [str(probe_exe), "--persist-driver"],
-        capture_output=True, text=True, timeout=20,
-    )
-    driver_out = (driver_result.stdout or "").strip()
-    driver_ok = driver_out.startswith("persist:ok")
-    if driver_ok:
-        console.print("[green]Kernel driver installed.[/] CPU temperature available after reboot.")
-    else:
-        detail = driver_out or (driver_result.stderr or "no output").strip()
-        console.print(f"[yellow]Driver persistence failed:[/] {detail}")
-        if "INVALID_IMAGE_HASH" in detail or "lhm_open_failed" in detail:
-            console.print("[yellow]Hint:[/] HVCI (Memory Integrity) is likely blocking WinRing0x64.sys.")
-            console.print("  → Windows Security → Device Security → Core isolation → Memory Integrity → Off → Reboot")
-            console.print("  → Then run this command again as Administrator.")
-        elif "driver_not_in_registry" in detail:
-            console.print("[yellow]Hint:[/] LHM opened but driver wasn't registered. Try rebooting and re-running.")
-        console.print("CPU temp will remain unavailable until the driver is installed.")
-
-    console.print(f"[green]Installed![/] Sensor task registered (runs at logon).")
-    console.print(f"Output file: [cyan]{out_file}[/]")
-    console.print("Start the monitor normally: [bold]python -m ai_meter.main run[/]")
+    console.print("[red]Disabled.[/] The legacy sensor service used WinRing0/LibreHardwareMonitor.")
+    console.print("Windows/EDR can block that kernel driver as vulnerable; ai-meter will not install it.")
+    console.print("Use [bold]python -m ai_meter.main uninstall-service[/] as Administrator to remove old installs.")
+    console.print("CPU/GPU temperature may show [bold]unknown[/]; CPU/RAM/disk/net still use safe user-mode probes.")
+    raise typer.Exit(code=2)
 
 
 @cli.command("uninstall-service")
 def uninstall_service() -> None:
-    """Remove background sensor task."""
+    """Remove legacy background sensor task and driver files."""
     if os.name != "nt":
         console.print("[red]Only supported on Windows.[/]")
         raise typer.Exit(code=1)
@@ -292,6 +215,8 @@ Stop-ScheduledTask  -TaskName 'ai-meter-sensor' -ErrorAction SilentlyContinue
 Unregister-ScheduledTask -TaskName 'ai-meter-sensor' -Confirm:$false -ErrorAction SilentlyContinue
 sc.exe stop WinRing0_1_2_0 | Out-Null
 sc.exe delete WinRing0_1_2_0 | Out-Null
+Remove-Item "$env:ProgramData\ai-meter\sensor.json" -Force -ErrorAction SilentlyContinue
+Remove-Item "$env:ProgramData\ai-meter\WinRing0x64.sys" -Force -ErrorAction SilentlyContinue
 Write-Host 'OK'
 """
     result = subprocess.run(
@@ -299,7 +224,14 @@ Write-Host 'OK'
         capture_output=True, text=True,
     )
     if "OK" in result.stdout:
-        console.print("[green]Uninstalled.[/] Sensor task and kernel driver removed.")
+        from ai_meter.collectors.system import _find_bundled_tool
+        probe_exe = _find_bundled_tool("ai-meter-sensor-probe.exe")
+        if probe_exe is not None:
+            try:
+                probe_exe.with_suffix(".sys").unlink(missing_ok=True)
+            except Exception:
+                pass
+        console.print("[green]Uninstalled.[/] Legacy sensor task, driver and output files removed.")
     else:
         console.print(f"[yellow]Nothing to remove or error:[/] {result.stderr.strip()}")
 

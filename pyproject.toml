@@ -40,8 +40,5 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 ai_meter = [
-  "bin/win-x64/*.dll",
-  "bin/win-x64/*.exe",
-  "bin/win-x64/*.json",
-  "bin/win-x64/*.pdb",
+  "bin/win-x64/ai-meter-winprobe.exe",
 ]

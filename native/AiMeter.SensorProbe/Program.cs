@@ -1,10 +1,7 @@
-using Microsoft.Win32;
-using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
-using System.Threading.Tasks;
 using LibreHardwareMonitor.Hardware;
 
 // Detach from the console window so no visible window appears when launched by Task Scheduler.
@@ -18,22 +15,48 @@ var jsonOptions = new JsonSerializerOptions
 var mode = args.Length > 0 ? args[0] : "--once";
 if (mode is "--help" or "-h")
 {
-    Console.WriteLine("ai-meter-sensor-probe --once | --doctor | --loop-to <file> [interval_ms] | --persist-driver");
+    Console.WriteLine("ai-meter-sensor-probe --once | --doctor | --loop-to <file> [interval_ms]");
+    Console.WriteLine("Disabled by default because LibreHardwareMonitor can load WinRing0. Set AI_METER_ALLOW_VULNERABLE_SENSOR_PROBE=1 only for isolated local testing.");
     return 0;
 }
 
-// Install WinRing0x64.sys as a persistent auto-start kernel service so non-admin reads work.
-// Must be run with admin privileges (called by install-service). Subsequent probe runs (even
-// as SYSTEM or a background task without full UAC token) find the driver already loaded and
-// can open the device handle to read CPU temperature without needing SE_LOAD_DRIVER_PRIVILEGE.
 if (mode == "--persist-driver")
 {
-    var (ok, detail) = PersistWinRing0DriverVerbose();
-    Console.WriteLine(ok ? "persist:ok" : $"persist:failed:{detail}");
-    return ok ? 0 : 1;
+    Console.WriteLine("persist:failed:vulnerable_driver_disabled");
+    return 2;
 }
 
-// Background loop mode: write JSON to a file every N ms (used by Windows service/task)
+if (!UnsafeSensorProbeAllowed())
+{
+    var disabled = DisabledResult();
+    if (mode == "--loop-to")
+    {
+        FreeConsole();
+        var outPath = args.Length > 1
+            ? args[1]
+            : Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                "ai-meter", "sensor.json");
+        var intervalMs = args.Length > 2 && int.TryParse(args[2], out var iv)
+            ? Math.Clamp(iv, 1000, 60000)
+            : 5000;
+
+        Directory.CreateDirectory(Path.GetDirectoryName(outPath)!);
+        var tmpPath = outPath + ".tmp";
+        while (true)
+        {
+            var json = JsonSerializer.Serialize(disabled, jsonOptions);
+            File.WriteAllText(tmpPath, json, System.Text.Encoding.UTF8);
+            File.Move(tmpPath, outPath, overwrite: true);
+            Thread.Sleep(intervalMs);
+        }
+    }
+
+    Console.WriteLine(JsonSerializer.Serialize(disabled, jsonOptions));
+    return 2;
+}
+
+// Legacy loop mode: write JSON to a file every N ms when explicitly enabled.
 if (mode == "--loop-to")
 {
     FreeConsole(); // detach so Task Scheduler doesn't show a console window
@@ -83,146 +106,22 @@ catch (Exception ex)
     return 3;
 }
 
-static (bool ok, string detail) PersistWinRing0DriverVerbose()
+static bool UnsafeSensorProbeAllowed()
 {
-    const string SvcName = "WinRing0_1_2_0";
-    const string DestDir = @"C:\ProgramData\ai-meter";
-    var destSys = Path.Combine(DestDir, "WinRing0x64.sys");
-
-    RunSc($"stop {SvcName}");
-    RunSc($"delete {SvcName}");
-    Thread.Sleep(600);
-
-    // Strategy 1: extract WinRing0x64.sys directly from LHM's embedded managed resources.
-    // This avoids the race where LHM creates-then-deletes the kernel service within Open().
-    var extracted = TryExtractSysFromResources(destSys);
-    if (!extracted)
-    {
-        // Strategy 2: background watcher — poll registry and temp dirs while computer.Open() runs,
-        // copying the .sys the instant it appears (before LHM's cleanup on driver-load failure).
-        extracted = TryExtractSysViaLhmRace(SvcName, destSys);
-    }
-    if (!extracted || !File.Exists(destSys))
-        return (false, "sys_not_extracted:both_strategies_failed");
-
-    Thread.Sleep(400);
-
-    // Register as auto-start kernel driver. Windows loads auto-start drivers at boot — after
-    // the service exists on disk, subsequent probe runs find the device already open and do not
-    // need SE_LOAD_DRIVER_PRIVILEGE. The sc start here may fail if HVCI blocks the driver at
-    // runtime; that is OK — what matters is the service entry existing for the next boot.
-    var createOut = RunScCapture($@"create {SvcName} type= kernel start= auto binPath= ""{destSys}"" DisplayName= ""WinRing0 (ai-meter)""");
-    if (!createOut.Contains("SUCCESS") && !createOut.Contains("[SC] CreateService SUCCESS"))
-        return (false, $"sc_create_failed:{createOut.Trim().Replace('\n', ' ')}");
-
-    var startOut = RunScCapture($"start {SvcName}");
-    // sc start may return ERROR_DRIVER_BLOCKED (1275) when HVCI blocks unsigned drivers.
-    // Still report ok — the service is registered, and after reboot Windows may load it.
-    bool startOk = startOut.Contains("START_PENDING") || startOut.Contains("RUNNING") ||
-                   startOut.Contains("1056");  // ERROR_SERVICE_ALREADY_RUNNING
-    return (true, startOk ? "ok" : $"ok_but_start_failed:{startOut.Trim().Replace('\n', ' ')}");
+    var value = Environment.GetEnvironmentVariable("AI_METER_ALLOW_VULNERABLE_SENSOR_PROBE") ?? "";
+    return value.Equals("1", StringComparison.OrdinalIgnoreCase) ||
+           value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+           value.Equals("yes", StringComparison.OrdinalIgnoreCase) ||
+           value.Equals("on", StringComparison.OrdinalIgnoreCase);
 }
 
-static bool TryExtractSysFromResources(string destSys)
+static ProbeResult DisabledResult() => new()
 {
-    // WinRing0x64.sys is embedded as a managed resource in LibreHardwareMonitorLib.dll.
-    // Extracting it here skips the sc create/start/delete cycle that happens inside Open().
-    try
-    {
-        var lhm = typeof(Computer).Assembly;
-        var resName = lhm.GetManifestResourceNames()
-            .FirstOrDefault(r => r.EndsWith("WinRing0x64.sys", StringComparison.OrdinalIgnoreCase));
-        if (resName is null) return false;
-
-        Directory.CreateDirectory(Path.GetDirectoryName(destSys)!);
-        using var stream = lhm.GetManifestResourceStream(resName)!;
-        using var file = File.Create(destSys);
-        stream.CopyTo(file);
-        return File.Exists(destSys) && new FileInfo(destSys).Length > 0;
-    }
-    catch { return false; }
-}
-
-static bool TryExtractSysViaLhmRace(string svcName, string destSys)
-{
-    // Fallback: monitor registry + common temp dirs while computer.Open() runs.
-    // LHM extracts the .sys to %TEMP%, registers the service, then (on failure) deletes both.
-    // We race to copy the file before cleanup.
-    var regKey = $@"HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\{svcName}";
-    bool captured = false;
-
-    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-    var watchTask = Task.Run(() =>
-    {
-        try
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(destSys)!);
-            while (!cts.Token.IsCancellationRequested)
-            {
-                // Check registry first (cheapest)
-                var img = Registry.GetValue(regKey, "ImagePath", null) as string ?? "";
-                if (!string.IsNullOrEmpty(img))
-                {
-                    if (img.StartsWith(@"\??\", StringComparison.OrdinalIgnoreCase))
-                        img = img[4..];
-                    if (File.Exists(img))
-                    {
-                        try { File.Copy(img, destSys, overwrite: true); captured = true; return; }
-                        catch { }
-                    }
-                }
-                // Also scan temp dirs for the .sys directly
-                foreach (var tempDir in new[] { Path.GetTempPath(),
-                    Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData) })
-                {
-                    try
-                    {
-                        var found = Directory.GetFiles(tempDir, "WinRing0x64.sys",
-                            SearchOption.AllDirectories).FirstOrDefault();
-                        if (found is not null && found != destSys)
-                        {
-                            File.Copy(found, destSys, overwrite: true);
-                            captured = true;
-                            return;
-                        }
-                    }
-                    catch { }
-                }
-                Thread.Sleep(30);
-            }
-        }
-        catch { }
-    });
-
-    var computer = new Computer { IsCpuEnabled = true };
-    try { computer.Open(); } catch { /* driver blocked, but file may have appeared */ }
-    Thread.Sleep(300);
-    cts.Cancel();
-    watchTask.Wait(TimeSpan.FromSeconds(3));
-    try { computer.Close(); } catch { }
-
-    return captured && File.Exists(destSys);
-}
-
-static void RunSc(string args) => RunScCapture(args);
-
-static string RunScCapture(string args)
-{
-    try
-    {
-        using var p = Process.Start(new ProcessStartInfo("sc.exe", args)
-        {
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-        })!;
-        var output = p.StandardOutput.ReadToEnd() + p.StandardError.ReadToEnd();
-        p.WaitForExit(5000);
-        return output;
-    }
-    catch (Exception ex) { return ex.Message; }
-}
+    Available = false,
+    Source = "sensor_probe:disabled",
+    Error = "vulnerable_driver_disabled",
+    SensorCount = 0
+};
 
 static ProbeResult ReadSensors(bool includeAll)
 {

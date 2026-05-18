@@ -17,6 +17,7 @@ class AppSection(BaseModel):
     collector_light_interval_ms: int = 250
     collector_heavy_interval_s: int = 10
     winprobe_interval_ms: int = 250
+    sensor_probe_enabled: bool = False
     retention_days: int = 90
     theme: str = "btop_dark"
     start_paused: bool = False
