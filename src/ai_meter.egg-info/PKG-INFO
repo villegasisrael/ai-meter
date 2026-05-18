@@ -181,6 +181,8 @@ Para maquinas lentas, subir `refresh_interval_ms`, `collector_light_interval_ms`
 | `-` | Refresh mas rapido |
 | `r` | Actualizar ahora |
 | `p` | Pausar / reanudar |
+| `c` | Mostrar / ocultar panel Claude |
+| `x` | Mostrar / ocultar panel Codex |
 | `h` | Ayuda |
 | `q` | Salir |
 
