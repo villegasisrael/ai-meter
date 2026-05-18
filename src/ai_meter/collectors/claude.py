@@ -74,8 +74,9 @@ class ClaudeCollector(Collector):
         offset = self.offset_store.get_offset(key)
         size = file_path.stat().st_size
         if offset == 0:
+            objects = _read_tail_jsonl(file_path, max_bytes=256 * 1024, max_lines=max_lines)
             self.offset_store.set_offset(key, size)
-            return []
+            return objects
         if size < offset:
             offset = 0
 
@@ -142,8 +143,7 @@ class ClaudeCollector(Collector):
                         output_tokens=_as_int(ub.get("output_tokens")),
                         cache_creation_tokens=_as_int(ub.get("cache_creation_input_tokens")),
                         cache_read_tokens=_as_int(ub.get("cache_read_input_tokens")),
-                        total_tokens=_as_int(ub.get("total_tokens"))
-                        or (_as_int(ub.get("input_tokens")) or 0) + (_as_int(ub.get("output_tokens")) or 0),
+                        total_tokens=_usage_total(ub),
                         accuracy="real",
                         source="projects_jsonl",
                         project_path=_find_str(obj, ["cwd", "project"]),
@@ -260,6 +260,46 @@ def _as_int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _usage_total(usage: dict[str, Any]) -> int | None:
+    total = _as_int(usage.get("total_tokens"))
+    if total is not None:
+        return total
+    parts = [
+        _as_int(usage.get("input_tokens")),
+        _as_int(usage.get("output_tokens")),
+        _as_int(usage.get("cache_creation_input_tokens")),
+        _as_int(usage.get("cache_read_input_tokens")),
+    ]
+    summed = sum(value or 0 for value in parts)
+    return summed if summed > 0 else None
+
+
+def _read_tail_jsonl(file_path: Path, max_bytes: int, max_lines: int) -> list[dict[str, Any]]:
+    try:
+        size = file_path.stat().st_size
+        start = max(0, size - max_bytes)
+        with file_path.open("rb") as handle:
+            handle.seek(start)
+            if start > 0:
+                handle.readline()
+            raw_lines = handle.readlines()
+    except OSError:
+        return []
+
+    rows: list[dict[str, Any]] = []
+    for raw in raw_lines[-max_lines:]:
+        line = raw.decode("utf-8", errors="ignore").strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            rows.append(obj)
+    return rows
 
 
 def _find_str(data: dict[str, Any], paths: list[str]) -> str | None:

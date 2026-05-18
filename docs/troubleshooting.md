@@ -32,9 +32,18 @@ Revisar:
 
 El collector no debe imprimir tokens ni secretos.
 
+## Claude tokens/activity unknown
+
+Revisar:
+
+- `~/.claude/projects/**/*.jsonl`
+- `~/.claude/stats-cache.json`
+
+El primer ciclo lee una cola reciente de JSONL y luego usa offsets. Si no hay muestras, probablemente Claude no ha escrito uso local en esos archivos.
+
 ## Claude API 401
 
-El `.env` existe pero el token no es valido o expiro. Reemplazar `TOKEN`.
+La API debe estar habilitada con `providers.claude.usage_api_enabled=true`. Si el `.env` existe pero el token no es valido o expiro, reemplazar `TOKEN`.
 
 Formato:
 
@@ -44,12 +53,19 @@ TOKEN = Bearer sk-ant-oat01--...
 
 ## Claude API 429
 
-La API rate-limito la consulta. El collector respeta `Retry-After` o usa 300s por defecto.
+La API rate-limito la consulta. El collector respeta `Retry-After` o usa 300s por defecto. Esto no bloquea los datos locales observados; solo deja los limites 5h/semanal en `unknown` si no hay cache previo.
 
 La UI debe mostrar algo como:
 
 ```text
 HTTP 429: retry in 123s
+```
+
+Para evitar depender de esa API:
+
+```toml
+[providers.claude]
+usage_api_enabled = false
 ```
 
 ## CPU cores en 0

@@ -14,14 +14,15 @@ from pathlib import Path
 from typing import Any
 
 _USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
-_CACHE_SECONDS = 60
+_DEFAULT_CACHE_SECONDS = 900
 _TIMEOUT_S = 10
 
 
 class ClaudeApiUsageCollector:
-    def __init__(self, token: str) -> None:
+    def __init__(self, token: str, cache_seconds: int = _DEFAULT_CACHE_SECONDS) -> None:
         # token = full Authorization header value, e.g. "Bearer sk-ant-oat01--..."
         self._token = token
+        self._cache_seconds = max(60, int(cache_seconds))
         self._last_fetch_mono = 0.0
         self._next_retry_mono = 0.0
         self._cached: dict[str, Any] | None = None
@@ -29,7 +30,11 @@ class ClaudeApiUsageCollector:
         self._last_error: str | None = None
 
     @classmethod
-    def from_env_file(cls, env_path: Path | None = None) -> ClaudeApiUsageCollector | None:
+    def from_env_file(
+        cls,
+        env_path: Path | None = None,
+        cache_seconds: int = _DEFAULT_CACHE_SECONDS,
+    ) -> ClaudeApiUsageCollector | None:
         candidates: list[Path | None] = [env_path] if env_path else []
         candidates += [
             Path.cwd() / ".env",
@@ -39,7 +44,7 @@ class ClaudeApiUsageCollector:
             if path and path.exists():
                 token = _parse_token_from_env(path)
                 if token:
-                    return cls(token)
+                    return cls(token, cache_seconds=cache_seconds)
         return None
 
     @property
@@ -50,11 +55,15 @@ class ClaudeApiUsageCollector:
     def last_error(self) -> str | None:
         return self._last_error
 
+    @property
+    def cache_seconds(self) -> int:
+        return self._cache_seconds
+
     def is_due(self) -> bool:
         now = time.monotonic()
         if now < self._next_retry_mono:
             return False
-        return now - self._last_fetch_mono >= _CACHE_SECONDS
+        return now - self._last_fetch_mono >= self._cache_seconds
 
     @property
     def retry_after_seconds(self) -> int:

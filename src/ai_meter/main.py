@@ -45,7 +45,15 @@ def doctor() -> None:
     table.add_column("Value")
 
     table.add_row("network_disabled", str(config.privacy.network_disabled).lower())
-    table.add_row("external_calls", "disabled")
+    table.add_row("model_calls", "disabled")
+    table.add_row("providers.codex.enabled", str(config.providers.codex.enabled).lower())
+    table.add_row("providers.claude.enabled", str(config.providers.claude.enabled).lower())
+    table.add_row(
+        "claude usage_api",
+        "enabled"
+        if config.providers.claude.enabled and config.providers.claude.usage_api_enabled
+        else "disabled",
+    )
     table.add_row("config_file", str(paths.config_file))
     table.add_row("db_file", str(paths.db_file))
 
@@ -63,7 +71,9 @@ def doctor() -> None:
     table.add_row("claude history.jsonl", str((claude_home / "history.jsonl").exists()).lower())
     table.add_row("claude stats-cache.json", str((claude_home / "stats-cache.json").exists()).lower())
 
-    system_batch = SystemCollector().collect(include_temp=True, include_top=False)
+    system_batch = SystemCollector(
+        winprobe_interval_ms=config.app.winprobe_interval_ms
+    ).collect(include_temp=True, include_top=False)
     system_meta = system_batch.provider_status.metadata if system_batch.provider_status else {}
     native_status = system_meta.get("native_winprobe", {}) if isinstance(system_meta, dict) else {}
     temp_c = system_meta.get("cpu_temp_c") if isinstance(system_meta, dict) else None

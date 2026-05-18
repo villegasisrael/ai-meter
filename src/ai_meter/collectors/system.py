@@ -28,8 +28,8 @@ _SERVICE_FILE_MAX_AGE_S = 30.0  # ignore if older than this
 class SystemCollector(Collector):
     name = "system"
 
-    def __init__(self) -> None:
-        self._native_sampler = NativeWinProbeSampler()
+    def __init__(self, winprobe_interval_ms: int = 250) -> None:
+        self._native_sampler = NativeWinProbeSampler(winprobe_interval_ms)
         self._cpu_name: str = self._get_cpu_name()
         self._cached_cpu_freq_mhz: float | None = None
         self._last_cpu_freq_read_at = 0.0
@@ -393,8 +393,9 @@ if ($result) { $result | ConvertTo-Json -Compress } else { '' }
 
 
 class NativeWinProbeSampler:
-    def __init__(self) -> None:
+    def __init__(self, stream_interval_ms: int = 250) -> None:
         self._exe = _find_bundled_tool("ai-meter-winprobe.exe")
+        self._stream_interval_ms = max(100, min(5000, int(stream_interval_ms)))
         self._latest: dict[str, Any] | None = None
         self._error: str | None = None
         self._started = False
@@ -412,6 +413,7 @@ class NativeWinProbeSampler:
             "available": self._exe is not None,
             "path": str(self._exe) if self._exe is not None else None,
             "started": self._started,
+            "stream_interval_ms": self._stream_interval_ms,
             "error": self._error,
         }
 
@@ -427,7 +429,7 @@ class NativeWinProbeSampler:
             return
         try:
             proc = subprocess.Popen(
-                [str(self._exe), "--stream", "250"],
+                [str(self._exe), "--stream", str(self._stream_interval_ms)],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 text=True,

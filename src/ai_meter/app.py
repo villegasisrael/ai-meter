@@ -43,10 +43,27 @@ class MonitorEngine:
         self.offset_store = offset_store
         self.db = db
 
-        self.codex_collector = CodexCollector(paths, offset_store)
-        self.claude_collector = ClaudeCollector(paths, offset_store)
-        self.system_collector = SystemCollector()
-        self.claude_api = ClaudeApiUsageCollector.from_env_file()
+        self.codex_collector = (
+            CodexCollector(paths, offset_store)
+            if self.config.providers.codex.enabled
+            else None
+        )
+        self.claude_collector = (
+            ClaudeCollector(paths, offset_store)
+            if self.config.providers.claude.enabled
+            else None
+        )
+        self.system_collector = SystemCollector(
+            winprobe_interval_ms=self.config.app.winprobe_interval_ms
+        )
+        self.claude_api = (
+            ClaudeApiUsageCollector.from_env_file(
+                cache_seconds=self.config.providers.claude.usage_api_interval_s
+            )
+            if self.config.providers.claude.enabled
+            and self.config.providers.claude.usage_api_enabled
+            else None
+        )
         self._lock = RLock()
         self._claude_api_usage: ParsedUsage | None = None
 
@@ -59,8 +76,16 @@ class MonitorEngine:
         }
         self._cpu_history: deque[float] = deque(maxlen=600)
 
+    def provider_enabled(self, provider: str) -> bool:
+        section = getattr(self.config.providers, provider, None)
+        return bool(getattr(section, "enabled", False))
+
+    @property
+    def enabled_ai_providers(self) -> list[str]:
+        return [name for name in ("claude", "codex") if self.provider_enabled(name)]
+
     def run_claude_api_collection(self) -> None:
-        """Fetch Claude usage limits from OAuth API. Rate-limited internally to 60s."""
+        """Fetch Claude usage limits from OAuth API when explicitly enabled."""
         if self.claude_api is None:
             return
         try:
@@ -84,7 +109,8 @@ class MonitorEngine:
             self._ingest_batch(system_batch)
         except Exception as exc:
             self._persist_error("system", str(exc))
-        for collector in (self.codex_collector, self.claude_collector):
+        collectors = [self.codex_collector, self.claude_collector]
+        for collector in [c for c in collectors if c is not None]:
             try:
                 batch = collector.collect()
                 self._ingest_batch(batch)

@@ -14,7 +14,9 @@ except ModuleNotFoundError:  # pragma: no cover
 
 class AppSection(BaseModel):
     refresh_interval_ms: int = 1000
+    collector_light_interval_ms: int = 250
     collector_heavy_interval_s: int = 10
+    winprobe_interval_ms: int = 250
     retention_days: int = 90
     theme: str = "btop_dark"
     start_paused: bool = False
@@ -33,12 +35,17 @@ class ProviderSection(BaseModel):
     source_priority: list[str] = Field(default_factory=list)
 
 
+class ClaudeProviderSection(ProviderSection):
+    usage_api_enabled: bool = False
+    usage_api_interval_s: int = 900
+
+
 class ProvidersSection(BaseModel):
     codex: ProviderSection = Field(
         default_factory=lambda: ProviderSection(source_priority=["sessions_jsonl", "logs_sqlite"])  # noqa: E501
     )
-    claude: ProviderSection = Field(
-        default_factory=lambda: ProviderSection(source_priority=["projects_jsonl", "stats_cache"])  # noqa: E501
+    claude: ClaudeProviderSection = Field(
+        default_factory=lambda: ClaudeProviderSection(source_priority=["projects_jsonl", "stats_cache"])  # noqa: E501
     )
     system: ProviderSection = Field(
         default_factory=lambda: ProviderSection(source_priority=["psutil"])
@@ -48,6 +55,10 @@ class ProvidersSection(BaseModel):
 class UISection(BaseModel):
     sparkline_points: int = 60
     max_events: int = 200
+    cpu_render_interval_ms: int = 250
+    system_render_interval_ms: int = 500
+    ai_render_interval_ms: int = 1000
+    events_render_interval_ms: int = 500
 
 
 class AppConfig(BaseModel):

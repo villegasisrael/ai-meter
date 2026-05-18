@@ -3,13 +3,61 @@
 ## Instalacion de desarrollo
 
 ```powershell
-pip install -e "c:\xampp\htdocs\clawdex"
+git clone <repo-url>
+cd ai-meter
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -U pip
+pip install -e .
 ```
 
 ## Ejecucion
 
 ```powershell
 python -m ai_meter.main run
+```
+
+Si instalaste el entrypoint:
+
+```powershell
+ai-meter run
+```
+
+## Proveedores
+
+Editar el config mostrado por `python -m ai_meter.main paths`:
+
+```toml
+[providers.codex]
+enabled = true
+
+[providers.claude]
+enabled = true
+usage_api_enabled = false
+usage_api_interval_s = 900
+```
+
+Para mostrar solo Claude, poner `providers.codex.enabled=false`. Para mostrar solo Codex, poner `providers.claude.enabled=false`.
+
+En la TUI tambien se puede ocultar/mostrar temporalmente cada panel sin cambiar config:
+`c` alterna Claude y `x` alterna Codex.
+
+## Performance
+
+Config recomendada por defecto:
+
+```toml
+[app]
+refresh_interval_ms = 1000
+collector_light_interval_ms = 250
+collector_heavy_interval_s = 10
+winprobe_interval_ms = 250
+
+[ui]
+cpu_render_interval_ms = 250
+system_render_interval_ms = 500
+ai_render_interval_ms = 1000
+events_render_interval_ms = 500
 ```
 
 ## Diagnostico
@@ -22,6 +70,7 @@ python -m ai_meter.main paths
 `doctor` debe confirmar:
 
 - rutas de config/data
+- proveedores habilitados y estado de Claude usage API
 - homes de Codex/Claude
 - fuente de metricas sistema
 - estado del sensor probe
@@ -82,4 +131,3 @@ python -m compileall src\ai_meter
 ```
 
 Si se usa `.venv\Scripts\python.exe`, instalar dependencias de test si faltan.
-

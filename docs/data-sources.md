@@ -41,14 +41,17 @@ Uso observado:
 
 - `~/.claude/projects/**/*.jsonl`
 - `~/.claude/stats-cache.json`
+- En el primer ciclo se lee una cola reciente de JSONL para mostrar actividad previa sin esperar nuevos eventos.
 
 Limites 5h/semanal:
 
-- Se obtienen con `TOKEN` en `.env`.
+- Son opcionales y quedan `unknown` si la API no esta habilitada.
+- Se habilitan con `providers.claude.usage_api_enabled=true` y `TOKEN` en `.env`.
 - Endpoint: `https://api.anthropic.com/api/oauth/usage`
 - No consume tokens de modelo.
 - Puede devolver `401` si el token ya no sirve.
 - Puede devolver `429`; el collector aplica backoff con `Retry-After`.
+- Si hay 429 persistente, usar solo datos locales observados; no hay fuente local confiable para los limites reales 5h/semanal.
 
 ## Sistema
 
@@ -74,4 +77,3 @@ Fallbacks:
 
 - `_run_sensor_probe()` como fallback si no hay archivo de servicio.
 - WMI ACPI solo como fallback debil; puede reportar valores poco utiles en laptops.
-

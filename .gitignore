@@ -2,3 +2,12 @@
 .env
 __pycache__/
 *.pyc
+*.pyo
+*.sys
+.pytest_cache/
+build/
+dist/
+*.egg-info/
+native/**/bin/
+native/**/obj/
+ai-meter-export.*

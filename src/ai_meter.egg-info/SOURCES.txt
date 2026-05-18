@@ -1,3 +1,4 @@
+LICENSE
 README.md
 pyproject.toml
 src/ai_meter/__init__.py
@@ -40,6 +41,9 @@ src/ai_meter/storage/db.py
 src/ai_meter/tui/__init__.py
 src/ai_meter/tui/app.py
 src/ai_meter/tui/widgets.py
+src/ai_meter/tui/workers.py
+tests/test_config_collectors.py
 tests/test_db.py
 tests/test_paths.py
 tests/test_security.py
+tests/test_workers.py

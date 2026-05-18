@@ -4,24 +4,57 @@ Monitor TUI local para Windows con uso de Codex/Claude y metricas del sistema en
 
 El objetivo es mostrar datos reales sin llamadas a modelos: plan, limites visibles, tokens observados, actividad local, CPU/RAM/disk/net, cores, GPU y temperatura cuando el equipo lo permite.
 
-## Uso Rapido
+## Estado
+
+- Proyecto local-first para Windows.
+- Licencia: Apache-2.0.
+- No hace llamadas a modelos.
+- La API de uso de Claude es opcional y esta deshabilitada por defecto.
+
+## Requisitos
+
+- Windows 10/11.
+- Python 3.11 o superior.
+- PowerShell.
+- Opcional para build nativo: .NET 6 SDK y `g++`/MinGW.
+
+## Instalacion Desde Source
 
 ```powershell
-pip install -e "c:\xampp\htdocs\clawdex"
+git clone <repo-url>
+cd ai-meter
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -U pip
+pip install -e .
+```
+
+Ejecutar:
+
+```powershell
+ai-meter run
+```
+
+Si prefieres no activar la venv:
+
+```powershell
+$env:PYTHONPATH='src'
 python -m ai_meter.main run
 ```
 
 Diagnostico:
 
 ```powershell
-python -m ai_meter.main doctor
-python -m ai_meter.main paths
+ai-meter doctor
+ai-meter paths
 ```
+
+`paths` muestra la ubicacion real del `config.toml`.
 
 ## Que Muestra
 
 - Codex: plan actual, uso 5h/semanal, reset y tokens observados.
-- Claude: plan local, tokens observados y limites 5h/semanal si hay token OAuth.
+- Claude: plan local, tokens/eventos observados y limites 5h/semanal solo si la API OAuth opcional esta habilitada.
 - System: CPU history, CPU total, cores, RAM, disk, red, temperatura CPU/GPU y procesos.
 - Live Activity: eventos recientes de Codex/Claude con hora local.
 
@@ -33,7 +66,7 @@ python -m ai_meter.main paths
 | Codex tokens/eventos | `~/.codex/sessions/**/*.jsonl` | `logs_2.sqlite` |
 | Claude plan | `~/.claude/.credentials.json` | `.claude/backups/*` |
 | Claude tokens/eventos | `~/.claude/projects/**/*.jsonl` | `stats-cache.json` |
-| Claude limites 5h/semanal | OAuth usage API con `TOKEN` en `.env` | `unknown` |
+| Claude limites 5h/semanal | OAuth usage API opcional | `unknown` |
 | CPU/RAM/disk/net | `ai-meter-winprobe.exe` | `psutil` |
 | CPU cores | `psutil.cpu_times(percpu=True)` por delta | sensor probe |
 | CPU/GPU temp | `C:\ProgramData\ai-meter\sensor.json` | probe directo / WMI |
@@ -45,8 +78,8 @@ Codex no expone el limite absoluto en tokens/unidades; expone porcentaje usado, 
 La temperatura CPU puede requerir acceso a driver/kernel. Instalar la tarea de fondo una vez desde PowerShell como administrador:
 
 ```powershell
-cd c:\xampp\htdocs\clawdex
-python -m ai_meter.main install-service
+cd ai-meter
+ai-meter install-service
 ```
 
 Esto registra `ai-meter-sensor` y escribe:
@@ -58,18 +91,62 @@ C:\ProgramData\ai-meter\sensor.json
 Desinstalar:
 
 ```powershell
-python -m ai_meter.main uninstall-service
+ai-meter uninstall-service
 ```
 
 ## Claude API
 
-Para limites Claude 5h/semanal, crear `.env` en la raiz:
+Los limites reales 5h/semanal de Claude no tienen una fuente local confiable. Por defecto se muestran `unknown` y se usan solo tokens/eventos locales.
+
+Para habilitar la API opcional, editar config:
+
+```toml
+[providers.claude]
+usage_api_enabled = true
+usage_api_interval_s = 900
+```
+
+Y crear `.env` en la raiz:
 
 ```text
 TOKEN = Bearer sk-ant-oat01--TU_TOKEN_AQUI
 ```
 
+Puedes partir de `.env.example`.
+
 La consulta va a `https://api.anthropic.com/api/oauth/usage`. No consume tokens de modelo. Si responde `401`, el token expiro o no sirve. Si responde `429`, la app aplica backoff.
+
+## Proveedores
+
+En el config se puede mostrar Claude y Codex, solo Claude o solo Codex:
+
+```toml
+[providers.codex]
+enabled = true
+
+[providers.claude]
+enabled = true
+```
+
+## Performance
+
+La TUI separa render, metricas rapidas y collectors pesados. Valores utiles en `config.toml`:
+
+```toml
+[app]
+refresh_interval_ms = 1000
+collector_light_interval_ms = 250
+collector_heavy_interval_s = 10
+winprobe_interval_ms = 250
+
+[ui]
+cpu_render_interval_ms = 250
+system_render_interval_ms = 500
+ai_render_interval_ms = 1000
+events_render_interval_ms = 500
+```
+
+Para maquinas lentas, subir `refresh_interval_ms`, `collector_light_interval_ms` y los intervalos de render.
 
 ## Controles
 
@@ -79,6 +156,8 @@ La consulta va a `https://api.anthropic.com/api/oauth/usage`. No consume tokens 
 | `-` | Refresh mas rapido |
 | `r` | Actualizar ahora |
 | `p` | Pausar / reanudar |
+| `c` | Mostrar / ocultar panel Claude |
+| `x` | Mostrar / ocultar panel Codex |
 | `h` | Ayuda |
 | `q` | Salir |
 
@@ -106,6 +185,14 @@ python -m unittest discover -s tests
 python -m compileall src\ai_meter
 ```
 
+## Contribuir
+
+- Mantener `model-calls=off`.
+- Preferir fuentes locales y mostrar `unknown` si un dato no es confiable.
+- No guardar historial salvo que `persist_history=true`.
+- Mantener collectors pesados fuera del hot path.
+- Correr `unittest` y `compileall` antes de proponer cambios.
+
 ## Documentacion
 
 - `AGENTS.md`: instrucciones para agentes.
@@ -121,5 +208,10 @@ python -m compileall src\ai_meter
 - `model-calls=off` siempre.
 - Los archivos locales de Codex/Claude se leen en el equipo.
 - Secrets se redactan antes de guardar/mostrar metadata.
-- La API Claude solo recibe el token OAuth cuando `TOKEN` existe.
+- La API Claude solo recibe el token OAuth cuando `usage_api_enabled=true` y `TOKEN` existe.
 
+## Licencia
+
+Apache License 2.0. Ver `LICENSE`.
+
+Dependencias de terceros: ver `THIRD_PARTY_NOTICES.md`.

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Iterable
 
 
@@ -44,14 +45,17 @@ def _val_to_dots(val: float, cur_low: float, cur_high: float) -> int:
     return round((val - cur_low) / (cur_high - cur_low) * 4)
 
 
-def render_cpu_history_graph(history: list[float], width: int, height: int = 8) -> str:
+def _render_percent_braille_graph(
+    values: Iterable[int | float], width: int, height: int
+) -> str:
+    width = max(1, int(width))
+    height = max(1, int(height))
     """
-    btop4win-faithful CPU history graph.
     Braille chars (2 time-steps × 4 dot-levels each).
     Color per char = gradient[max(left, right)] — not per row.
     """
     data_needed = width * 2
-    data = list(history)
+    data = [max(0.0, min(100.0, float(v))) for v in values]
     if len(data) < data_needed:
         data = [0.0] * (data_needed - len(data)) + data
     else:
@@ -90,6 +94,11 @@ def render_cpu_history_graph(history: list[float], width: int, height: int = 8) 
         lines.append("".join(parts))
 
     return "\n".join(lines)
+
+
+def render_cpu_history_graph(history: list[float], width: int, height: int = 8) -> str:
+    """btop4win-faithful CPU history graph."""
+    return _render_percent_braille_graph(history, width, height)
 
 
 # ---------------------------------------------------------------------------
@@ -155,8 +164,33 @@ def render_temp_bar(temp_c: float | None, max_temp: float = 100.0, width: int = 
 
 
 # ---------------------------------------------------------------------------
-# Sparkline (Claude / Codex token activity)
+# Activity graphs (Claude / Codex token activity)
 # ---------------------------------------------------------------------------
+
+def render_activity_graph(
+    values: Iterable[int | float], width: int = 48, height: int = 6
+) -> str:
+    data: list[float] = []
+    for value in values:
+        if value is None:
+            continue
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(number):
+            data.append(max(0.0, number))
+
+    if not data:
+        return _render_percent_braille_graph([], width, height)
+
+    high = max(data)
+    if high <= 0:
+        normalized = [0.0 for _ in data]
+    else:
+        normalized = [(value / high) * 100.0 for value in data]
+    return _render_percent_braille_graph(normalized, width, height)
+
 
 def render_sparkline(values: Iterable[int | float], width: int = 48) -> str:
     glyphs = "▁▂▃▄▅▆▇█"

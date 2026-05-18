@@ -8,7 +8,18 @@ version = "0.1.0"
 description = "Strict local-only TUI monitor for Codex and Claude usage"
 readme = "README.md"
 requires-python = ">=3.11"
+license = {text = "Apache-2.0"}
 authors = [{name = "ai-meter"}]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: Microsoft :: Windows",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Topic :: System :: Monitoring",
+]
 dependencies = [
   "textual>=0.72.0",
   "rich>=13.7.0",
@@ -28,4 +39,9 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-ai_meter = ["bin/win-x64/*"]
+ai_meter = [
+  "bin/win-x64/*.dll",
+  "bin/win-x64/*.exe",
+  "bin/win-x64/*.json",
+  "bin/win-x64/*.pdb",
+]
