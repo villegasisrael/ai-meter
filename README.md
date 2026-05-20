@@ -2,28 +2,112 @@
 
 Monitor TUI local para Windows y Linux. Muestra uso de Codex/Claude, actividad reciente y metricas del sistema sin llamadas a modelos.
 
-## Uso
+## Requisitos
+
+- Python 3.11 o superior.
+- Git.
+- Acceso de lectura a los directorios locales de Codex y/o Claude:
+  - Codex: `~/.codex`
+  - Claude: `~/.claude`
+
+No requiere servicios, drivers ni llamadas a modelos. En Windows incluye un probe nativo de usuario para metricas rapidas; en Linux usa `psutil`.
+
+## Instalacion en Windows
+
+Desde PowerShell:
 
 ```powershell
-$env:PYTHONPATH='src'
-python -m ai_meter.main run
-python -m ai_meter.main doctor
-python -m ai_meter.main paths
+git clone <repo-url> ai-meter
+cd ai-meter
+
+py -3 --version
+py -3 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+
+python -m pip install --upgrade pip
+python -m pip install -e .
+
+ai-meter doctor
+ai-meter run
 ```
 
-En Ubuntu/Linux:
+Si PowerShell bloquea la activacion del entorno:
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\.venv\Scripts\Activate.ps1
+```
+
+## Instalacion en Ubuntu/Linux
 
 ```bash
-PYTHONPATH=src python -m ai_meter.main run
-PYTHONPATH=src python -m ai_meter.main doctor
+sudo apt update
+sudo apt install -y python3 python3-venv python3-pip git
+
+git clone <repo-url> ai-meter
+cd ai-meter
+
+python3 --version
+python3 -m venv .venv
+source .venv/bin/activate
+
+python -m pip install --upgrade pip
+python -m pip install -e .
+
+ai-meter doctor
+ai-meter run
 ```
 
-Si esta instalado como entrypoint:
+La version de Python debe ser 3.11 o superior. En Ubuntu 24.04+ `python3` normalmente cumple; en versiones anteriores puede requerir instalar Python 3.11+ por separado.
+
+En Linux la temperatura de CPU solo aparece si el sistema ya expone sensores via kernel/`psutil`. Si no hay fuente confiable, se muestra `unknown`.
+
+## Uso
+
+Comandos principales:
 
 ```powershell
 ai-meter run
 ai-meter doctor
 ai-meter paths
+```
+
+Tambien puede ejecutarse sin instalar el entrypoint, desde la raiz del repo:
+
+Windows:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m ai_meter.main run
+```
+
+Linux:
+
+```bash
+PYTHONPATH=src python -m ai_meter.main run
+```
+
+## Actualizacion
+
+Desde la raiz del repositorio:
+
+```powershell
+git pull
+python -m pip install -e .
+```
+
+## Desinstalacion
+
+```powershell
+python -m pip uninstall ai-meter
+```
+
+Si existe una instalacion legacy del sensor en Windows, limpiar como administrador:
+
+```powershell
+python -m ai_meter.main uninstall-service
+Remove-Item "$env:ProgramData\ai-meter\sensor.json" -Force -ErrorAction SilentlyContinue
+Remove-Item ".\src\ai_meter\bin\win-x64\ai-meter-sensor-probe.sys" -Force -ErrorAction SilentlyContinue
 ```
 
 ## Datos
@@ -45,14 +129,6 @@ La temperatura puede quedar en `unknown`. No se instala ningun driver kernel par
 ## Anti-Tampering / driver legacy
 
 Versiones anteriores podian usar `ai-meter-sensor-probe` con LibreHardwareMonitor/WinRing0 para temperatura. Ese camino esta deshabilitado porque Windows/EDR puede bloquearlo como controlador vulnerable.
-
-Si aparece un aviso sobre `ai-meter-sensor-probe.sys`, limpiar restos legacy como administrador:
-
-```powershell
-python -m ai_meter.main uninstall-service
-Remove-Item "$env:ProgramData\ai-meter\sensor.json" -Force -ErrorAction SilentlyContinue
-Remove-Item ".\src\ai_meter\bin\win-x64\ai-meter-sensor-probe.sys" -Force -ErrorAction SilentlyContinue
-```
 
 No desactivar Memory Integrity/HVCI para ai-meter.
 
@@ -79,13 +155,20 @@ usage_api_interval_s = 900
 persist_history = false
 ```
 
-## Build y pruebas
+## Desarrollo
 
 ```powershell
 .\scripts\build_native.ps1
 .\scripts\build_exe.ps1
 $env:PYTHONPATH='src'; python -m unittest discover -s tests
 python -m compileall src\ai_meter
+```
+
+En Linux:
+
+```bash
+PYTHONPATH=src python -m unittest discover -s tests
+python -m compileall src/ai_meter
 ```
 
 ## Documentacion
