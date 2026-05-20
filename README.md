@@ -1,6 +1,6 @@
 # ai-meter
 
-Monitor TUI local para Windows. Muestra uso de Codex/Claude, actividad reciente y metricas del sistema sin llamadas a modelos.
+Monitor TUI local para Windows y Linux. Muestra uso de Codex/Claude, actividad reciente y metricas del sistema sin llamadas a modelos.
 
 ## Uso
 
@@ -9,6 +9,13 @@ $env:PYTHONPATH='src'
 python -m ai_meter.main run
 python -m ai_meter.main doctor
 python -m ai_meter.main paths
+```
+
+En Ubuntu/Linux:
+
+```bash
+PYTHONPATH=src python -m ai_meter.main run
+PYTHONPATH=src python -m ai_meter.main doctor
 ```
 
 Si esta instalado como entrypoint:
@@ -23,14 +30,15 @@ ai-meter paths
 
 | Dato | Fuente principal | Fallback |
 | --- | --- | --- |
-| Codex plan/limites | `~/.codex/sessions/**/*.jsonl` (`payload.rate_limits`) | `~/.codex/logs_2.sqlite` |
-| Codex tokens/eventos | `~/.codex/sessions/**/*.jsonl` | `logs_2.sqlite` |
+| Codex plan/limites | `~/.codex/sessions/**/*.jsonl`, `~/.codex/archived_sessions/*.jsonl` (`payload.rate_limits`) | `~/.codex/logs_2.sqlite` |
+| Codex tokens/eventos | `~/.codex/sessions/**/*.jsonl`, `~/.codex/archived_sessions/*.jsonl` | `logs_2.sqlite` |
 | Claude plan | `~/.claude/.credentials.json` | `.claude/backups/*` |
 | Claude tokens/eventos | `~/.claude/projects/**/*.jsonl` | `stats-cache.json` |
 | Claude limites 5h/semanal | OAuth usage API opcional | `unknown` |
-| CPU/RAM/disk/net | `ai-meter-winprobe.exe` | `psutil` |
+| CPU/RAM/disk/net | Windows: `ai-meter-winprobe.exe`; Linux: `psutil` | `psutil` |
 | CPU cores | `psutil.cpu_times(percpu=True)` por delta | `unknown` |
-| CPU/GPU temp | WMI confiable si existe | `unknown` |
+| CPU temp | Windows: WMI confiable si existe; Linux: `psutil.sensors_temperatures()` | `unknown` |
+| GPU temp | No soportado por defecto | `unknown` |
 
 La temperatura puede quedar en `unknown`. No se instala ningun driver kernel para leer sensores.
 

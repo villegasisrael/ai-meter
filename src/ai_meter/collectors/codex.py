@@ -13,6 +13,10 @@ from ai_meter.models import EventRecord, ProviderStatus, UsageRecord
 from ai_meter.paths import AppPaths
 from ai_meter.security import redact_sensitive
 
+_SESSION_WINDOW_MINUTES = 5 * 60
+_WEEKLY_WINDOW_MINUTES = 7 * 24 * 60
+
+
 class CodexCollector(Collector):
     name = "codex"
 
@@ -26,10 +30,11 @@ class CodexCollector(Collector):
         home = self.paths.codex_home
         config = home / "config.toml"
         sessions_dir = home / "sessions"
+        archived_sessions_dir = home / "archived_sessions"
         session_index = home / "session_index.jsonl"
         logs_sqlite = home / "logs_2.sqlite"
         auth = home / "auth.json"
-        found = any(p.exists() for p in [sessions_dir, session_index, logs_sqlite, config])
+        found = any(p.exists() for p in [sessions_dir, archived_sessions_dir, session_index, logs_sqlite, config])
         return ProviderStatus(
             name=self.name,
             enabled=True,
@@ -41,6 +46,7 @@ class CodexCollector(Collector):
                 "config_toml": config.exists(),
                 "session_index_jsonl": session_index.exists(),
                 "sessions_dir": sessions_dir.exists(),
+                "archived_sessions_dir": archived_sessions_dir.exists(),
                 "logs_sqlite": logs_sqlite.exists(),
                 "auth_present": auth.exists(),
             },
@@ -73,11 +79,15 @@ class CodexCollector(Collector):
         index_file = self.paths.codex_home / "session_index.jsonl"
         if index_file.exists():
             files.append(index_file)
-        session_dir = self.paths.codex_home / "sessions"
-        if session_dir.exists():
-            all_files = list(session_dir.rglob("*.jsonl"))
-            all_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-            files.extend(all_files[:6])
+        all_files: list[Path] = []
+        for session_dir in (
+            self.paths.codex_home / "sessions",
+            self.paths.codex_home / "archived_sessions",
+        ):
+            if session_dir.exists():
+                all_files.extend(session_dir.rglob("*.jsonl"))
+        all_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        files.extend(all_files[:8])
         self._session_files_cache = files
         self._session_files_cached_at = now
         return files
@@ -87,8 +97,9 @@ class CodexCollector(Collector):
         offset = self.offset_store.get_offset(key)
         size = file_path.stat().st_size
         if offset == 0:
+            objects = _read_tail_jsonl(file_path, max_bytes=256 * 1024, max_lines=max_lines)
             self.offset_store.set_offset(key, size)
-            return []
+            return objects
         if size < offset:
             offset = 0
 
@@ -145,25 +156,31 @@ class CodexCollector(Collector):
     def _collect_sessions_usage(self, rows_by_file: list[tuple[Path, list[dict[str, Any]]]]) -> list[UsageRecord]:
         usage: list[UsageRecord] = []
         for fp, rows in rows_by_file:
+            current_model: str | None = None
             for obj in rows:
+                model_from_context = _turn_context_model(obj)
+                if model_from_context:
+                    current_model = model_from_context
+                    continue
                 usage_blob = _extract_usage(obj)
                 if not usage_blob:
                     continue
                 ts = _parse_ts(obj.get("timestamp"))
                 session_id = _find_first_str(obj, ["session_id", "payload.session_id", "thread_name"])
-                model = _find_first_str(obj, ["payload.model", "model", "payload.model_provider"])
+                model = _find_first_str(obj, ["payload.info.model", "payload.model", "model", "payload.model_provider"])
+                if not model:
+                    model = current_model
                 usage.append(
                     UsageRecord(
                         provider="codex",
                         timestamp=ts,
                         input_tokens=_as_int(usage_blob.get("input_tokens")),
                         output_tokens=_as_int(usage_blob.get("output_tokens")),
-                        cache_creation_tokens=_as_int(
-                            usage_blob.get("cache_creation_input_tokens")
-                            or usage_blob.get("cached_input_tokens")
+                        cache_creation_tokens=_as_int(usage_blob.get("cache_creation_input_tokens")),
+                        cache_read_tokens=_as_int(
+                            usage_blob.get("cache_read_input_tokens") or usage_blob.get("cached_input_tokens")
                         ),
-                        cache_read_tokens=_as_int(usage_blob.get("cache_read_input_tokens")),
-                        total_tokens=_as_int(usage_blob.get("total_tokens")),
+                        total_tokens=_usage_total(usage_blob),
                         accuracy="real",
                         source="sessions_jsonl",
                         session_external_id=session_id,
@@ -217,11 +234,9 @@ class CodexCollector(Collector):
                         timestamp=_parse_ts(ts_raw),
                         input_tokens=_as_int(ub.get("input_tokens")),
                         output_tokens=_as_int(ub.get("output_tokens")),
-                        cache_creation_tokens=_as_int(
-                            ub.get("cache_creation_input_tokens") or ub.get("cached_input_tokens")
-                        ),
-                        cache_read_tokens=_as_int(ub.get("cache_read_input_tokens")),
-                        total_tokens=_as_int(ub.get("total_tokens")),
+                        cache_creation_tokens=_as_int(ub.get("cache_creation_input_tokens")),
+                        cache_read_tokens=_as_int(ub.get("cache_read_input_tokens") or ub.get("cached_input_tokens")),
+                        total_tokens=_usage_total(ub),
                         accuracy="real",
                         source="logs_sqlite",
                         metadata={"row_id": row_id},
@@ -273,46 +288,32 @@ class CodexCollector(Collector):
         if not isinstance(rate_limits, dict):
             return {}
 
-        return {
-            "rate_limits": {
-                "plan_type": payload.get("plan_type"),
-                "allowed": rate_limits.get("allowed"),
-                "limit_reached": rate_limits.get("limit_reached"),
-                "primary": rate_limits.get("primary"),
-                "secondary": rate_limits.get("secondary"),
-                "source": "logs_sqlite",
-            }
-        }
+        normalized = _normalize_rate_limits(rate_limits, "logs_sqlite", plan_type=payload.get("plan_type"))
+        return {"rate_limits": normalized} if normalized else {}
 
     def _collect_latest_session_rate_limits(self, files: list[Path]) -> dict[str, Any]:
         latest: tuple[datetime, dict[str, Any]] | None = None
-        for fp in files[:6]:
+        for fp in files[:10]:
             for obj in _read_tail_jsonl(fp, max_bytes=256 * 1024, max_lines=400):
                 payload = obj.get("payload") if isinstance(obj.get("payload"), dict) else {}
-                rate_limits = payload.get("rate_limits") if isinstance(payload, dict) else None
+                rate_limits = _find_rate_limits(payload) if isinstance(payload, dict) else None
                 if not isinstance(rate_limits, dict):
                     continue
-                plan_type = rate_limits.get("plan_type")
-                if not plan_type:
+                normalized = _normalize_rate_limits(
+                    rate_limits,
+                    "sessions_jsonl",
+                    plan_type=payload.get("plan_type") or rate_limits.get("plan_type"),
+                )
+                if not normalized:
                     continue
                 ts = _parse_ts(obj.get("timestamp"))
                 if latest is None or ts > latest[0]:
-                    latest = (ts, rate_limits)
+                    latest = (ts, normalized)
 
         if latest is None:
             return {}
 
-        rate_limits = latest[1]
-        return {
-            "rate_limits": {
-                "plan_type": rate_limits.get("plan_type"),
-                "allowed": rate_limits.get("allowed"),
-                "limit_reached": rate_limits.get("limit_reached"),
-                "primary": rate_limits.get("primary"),
-                "secondary": rate_limits.get("secondary"),
-                "source": "sessions_jsonl",
-            }
-        }
+        return {"rate_limits": latest[1]}
 
 
 def _try_json_parse(text: str) -> dict[str, Any] | None:
@@ -382,6 +383,29 @@ def _as_int(value: Any) -> int | None:
         return None
 
 
+def _as_float(value: Any) -> float | None:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _usage_total(usage: dict[str, Any]) -> int | None:
+    total = _as_int(usage.get("total_tokens"))
+    if total is not None:
+        return total
+    parts = [
+        _as_int(usage.get("input_tokens")),
+        _as_int(usage.get("output_tokens")),
+        _as_int(usage.get("cache_creation_input_tokens")),
+        _as_int(usage.get("cache_read_input_tokens") or usage.get("cached_input_tokens")),
+    ]
+    summed = sum(value or 0 for value in parts)
+    return summed if summed > 0 else None
+
+
 def _find_first_str(data: dict[str, Any], keys: list[str]) -> str | None:
     for key in keys:
         current: Any = data
@@ -395,6 +419,141 @@ def _find_first_str(data: dict[str, Any], keys: list[str]) -> str | None:
         if ok and isinstance(current, str) and current.strip():
             return current.strip()
     return None
+
+
+def _find_rate_limits(payload: dict[str, Any]) -> dict[str, Any] | None:
+    direct = payload.get("rate_limits")
+    if isinstance(direct, dict):
+        return direct
+    singular = payload.get("rate_limit")
+    if isinstance(singular, dict):
+        out = dict(singular)
+        for key in ("plan_type", "allowed", "limit_reached", "credits"):
+            if key in payload and key not in out:
+                out[key] = payload[key]
+        return out
+    return None
+
+
+def _normalize_rate_limits(rate_limits: dict[str, Any], source: str, plan_type: Any = None) -> dict[str, Any] | None:
+    primary = _normalize_rate_window(
+        rate_limits.get("primary")
+        or rate_limits.get("primary_window")
+        or rate_limits.get("primaryWindow")
+    )
+    secondary = _normalize_rate_window(
+        rate_limits.get("secondary")
+        or rate_limits.get("secondary_window")
+        or rate_limits.get("secondaryWindow")
+    )
+    primary, secondary = _normalize_window_order(primary, secondary)
+
+    out: dict[str, Any] = {
+        "plan_type": _first_present(plan_type, rate_limits.get("plan_type"), rate_limits.get("planType")),
+        "allowed": _first_present(rate_limits.get("allowed")),
+        "limit_reached": _first_present(rate_limits.get("limit_reached"), rate_limits.get("limitReached")),
+        "primary": primary,
+        "secondary": secondary,
+        "source": source,
+    }
+    credits = rate_limits.get("credits")
+    if isinstance(credits, dict):
+        out["credits"] = {
+            "has_credits": _first_present(credits.get("has_credits"), credits.get("hasCredits")),
+            "unlimited": credits.get("unlimited"),
+            "balance": credits.get("balance"),
+        }
+    if primary is None and secondary is None and out["plan_type"] is None:
+        return None
+    return out
+
+
+def _first_present(*values: Any) -> Any:
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
+def _normalize_rate_window(raw: Any) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+
+    used = _as_float(raw.get("used_percent") if "used_percent" in raw else raw.get("usedPercent"))
+    limit_window_seconds = _as_int(
+        raw.get("limit_window_seconds")
+        if "limit_window_seconds" in raw
+        else raw.get("limitWindowSeconds")
+    )
+    window_duration_mins = _as_int(
+        raw.get("window_duration_mins")
+        if "window_duration_mins" in raw
+        else raw.get("windowDurationMins") if "windowDurationMins" in raw else raw.get("window_minutes")
+    )
+    if limit_window_seconds is None and window_duration_mins is not None:
+        limit_window_seconds = window_duration_mins * 60
+
+    reset_at = _as_int(
+        raw.get("reset_at")
+        if "reset_at" in raw
+        else raw.get("resetAt") if "resetAt" in raw else raw.get("resets_at")
+    )
+    reset_after_seconds = _as_int(
+        raw.get("reset_after_seconds")
+        if "reset_after_seconds" in raw
+        else raw.get("resetAfterSeconds")
+    )
+    if reset_after_seconds is None and reset_at is not None:
+        reset_after_seconds = max(0, reset_at - int(datetime.now(timezone.utc).timestamp()))
+
+    out: dict[str, Any] = {}
+    if used is not None:
+        out["used_percent"] = used
+    if limit_window_seconds is not None:
+        out["limit_window_seconds"] = limit_window_seconds
+    if reset_after_seconds is not None:
+        out["reset_after_seconds"] = reset_after_seconds
+    if reset_at is not None:
+        out["reset_at"] = reset_at
+    return out or None
+
+
+def _normalize_window_order(
+    primary: dict[str, Any] | None,
+    secondary: dict[str, Any] | None,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    primary_role = _window_role(primary)
+    secondary_role = _window_role(secondary)
+    if primary and secondary:
+        if primary_role == "weekly" and secondary_role in {"session", "unknown"}:
+            return secondary, primary
+        return primary, secondary
+    if primary and primary_role == "weekly":
+        return None, primary
+    if secondary and secondary_role in {"session", "unknown"}:
+        return secondary, None
+    return primary, secondary
+
+
+def _window_role(window: dict[str, Any] | None) -> str:
+    if not isinstance(window, dict):
+        return "unknown"
+    seconds = _as_int(window.get("limit_window_seconds"))
+    if seconds is None:
+        return "unknown"
+    minutes = seconds // 60
+    if minutes == _SESSION_WINDOW_MINUTES:
+        return "session"
+    if minutes == _WEEKLY_WINDOW_MINUTES:
+        return "weekly"
+    return "unknown"
+
+
+def _turn_context_model(obj: dict[str, Any]) -> str | None:
+    content_type = _find_first_str(obj, ["type", "payload.type"])
+    if content_type != "turn_context":
+        return None
+    return _find_first_str(obj, ["payload.model", "payload.info.model", "model"])
 
 
 def _event_text(obj: dict[str, Any]) -> str | None:

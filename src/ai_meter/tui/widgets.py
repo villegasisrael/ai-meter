@@ -225,9 +225,10 @@ def render_sparkline(values: Iterable[int | float], width: int = 48) -> str:
 # Core grid
 # ---------------------------------------------------------------------------
 
-def render_core_grid(core_loads: list[dict], cols: int = 2) -> str:
+def render_core_grid(core_loads: list[dict], cols: int = 2, mini_width: int = 7) -> str:
     if not core_loads:
         return ""
+    mini_width = max(4, min(14, int(mini_width)))
     lines = []
     for i in range(0, len(core_loads), cols):
         row_items = core_loads[i : i + cols]
@@ -237,7 +238,7 @@ def render_core_grid(core_loads: list[dict], cols: int = 2) -> str:
             num = raw.replace("CPU Core #", "")
             label = f"C{num}".rjust(3)
             load = float(core.get("load_percent", 0.0))
-            bar = render_mini_bar(load, 7)
+            bar = render_mini_bar(load, mini_width)
             load_color = cpu_gradient_color(load)
             parts.append(f"[grey50]{label}[/] {bar}[{load_color}]{load:4.0f}%[/]")
         lines.append("  " + "  ".join(parts))

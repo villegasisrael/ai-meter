@@ -15,7 +15,8 @@
 - Light collect: `app.collector_light_interval_ms`, por defecto 250ms, solo sistema rapido.
 - Heavy collect: `app.collector_heavy_interval_s`, por defecto 10s.
 - Claude API: deshabilitada por defecto; si se habilita usa `providers.claude.usage_api_interval_s`.
-- Winprobe: `app.winprobe_interval_ms`, por defecto 250ms.
+- Winprobe: solo Windows, `app.winprobe_interval_ms`, por defecto 250ms.
+- Linux/Ubuntu: `SystemCollector` usa `psutil` para sistema rapido.
 
 No crear hilos por tick. Usar `PeriodicWorker`.
 
