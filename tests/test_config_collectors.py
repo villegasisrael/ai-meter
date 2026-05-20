@@ -2,9 +2,13 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
+from ai_meter.collectors import system as system_mod
+from ai_meter.collectors.claude_api_usage import ParsedUsage
 from ai_meter.collectors.claude import ClaudeCollector
+from ai_meter.collectors.codex import CodexCollector
 from ai_meter.collectors.system import SystemCollector
 from ai_meter.config import AppConfig, ConfigManager
 from ai_meter.paths import AppPaths
@@ -62,6 +66,33 @@ class ConfigCollectorTests(unittest.TestCase):
             "sensor_probe_disabled",
         )
 
+    def test_system_collector_reads_linux_temperature_sensors(self) -> None:
+        if system_mod.psutil is None:
+            self.skipTest("psutil unavailable")
+        collector = SystemCollector(sensor_probe_enabled=False)
+        sensors = {
+            "nvme": [SimpleNamespace(label="Composite", current=84.0)],
+            "k10temp": [SimpleNamespace(label="Tctl", current=61.5)],
+        }
+
+        with patch.object(
+            system_mod.psutil,
+            "sensors_temperatures",
+            return_value=sensors,
+            create=True,
+        ):
+            temp, source = collector._read_linux_temp_fallback()
+
+        self.assertEqual(temp, 61.5)
+        self.assertEqual(source, "linux:k10temp:Tctl")
+
+    def test_winprobe_is_unavailable_outside_windows(self) -> None:
+        sampler = system_mod.NativeWinProbeSampler()
+        with patch.object(system_mod.os, "name", "posix"):
+            self.assertFalse(sampler.available)
+            self.assertFalse(sampler.status()["available"])
+            self.assertIsNone(sampler.snapshot())
+
     def test_claude_collector_reads_initial_tail_once(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             paths = _paths(Path(tmp))
@@ -90,6 +121,133 @@ class ConfigCollectorTests(unittest.TestCase):
             self.assertEqual(len(first.usage_samples), 1)
             self.assertEqual(first.usage_samples[0].total_tokens, 20)
             self.assertEqual(second.usage_samples, [])
+
+    def test_claude_collector_dedupes_streaming_chunks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = _paths(Path(tmp))
+            project_dir = paths.claude_home / "projects" / "repo"
+            project_dir.mkdir(parents=True)
+            session_file = project_dir / "session.jsonl"
+            rows = [
+                {
+                    "timestamp": "2026-05-15T12:00:00+00:00",
+                    "type": "assistant",
+                    "requestId": "req_stream",
+                    "message": {
+                        "id": "msg_1",
+                        "model": "claude",
+                        "usage": {"input_tokens": 10, "output_tokens": 2},
+                    },
+                },
+                {
+                    "timestamp": "2026-05-15T12:00:01+00:00",
+                    "type": "assistant",
+                    "requestId": "req_stream",
+                    "message": {
+                        "id": "msg_1",
+                        "model": "claude",
+                        "usage": {"input_tokens": 10, "output_tokens": 7},
+                    },
+                },
+            ]
+            session_file.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+            collector = ClaudeCollector(paths, MemoryOffsetStore())
+            first = collector.collect()
+
+            self.assertEqual(len(first.usage_samples), 1)
+            self.assertEqual(first.usage_samples[0].output_tokens, 7)
+            self.assertEqual(first.usage_samples[0].total_tokens, 17)
+
+    def test_codex_collector_reads_archived_sessions_and_normalizes_windows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = _paths(Path(tmp))
+            archived_dir = paths.codex_home / "archived_sessions"
+            archived_dir.mkdir(parents=True)
+            session_file = archived_dir / "archived.jsonl"
+            row = {
+                "timestamp": "2026-05-15T12:00:00+00:00",
+                "payload": {
+                    "rate_limits": {
+                        "plan_type": "pro",
+                        "primary": {
+                            "used_percent": 40,
+                            "window_minutes": 10080,
+                            "resets_at": 4102444800,
+                        },
+                        "secondary": {
+                            "used_percent": 12,
+                            "window_minutes": 300,
+                            "resets_at": 4102444800,
+                        },
+                    }
+                },
+            }
+            session_file.write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+            collector = CodexCollector(paths, MemoryOffsetStore())
+            batch = collector.collect()
+            limits = batch.provider_status.metadata["rate_limits"]
+
+            self.assertTrue(batch.provider_status.metadata["archived_sessions_dir"])
+            self.assertEqual(limits["plan_type"], "pro")
+            self.assertEqual(limits["primary"]["limit_window_seconds"], 18000)
+            self.assertEqual(limits["secondary"]["limit_window_seconds"], 604800)
+            self.assertGreater(limits["primary"]["reset_after_seconds"], 0)
+
+    def test_codex_usage_uses_turn_context_model_and_cached_read_tokens(self) -> None:
+        collector = CodexCollector(_paths(Path(tempfile.gettempdir())), MemoryOffsetStore())
+        rows = [
+            {
+                "timestamp": "2026-05-15T12:00:00+00:00",
+                "type": "turn_context",
+                "payload": {"model": "gpt-5.5"},
+            },
+            {
+                "timestamp": "2026-05-15T12:00:01+00:00",
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "info": {
+                        "last_token_usage": {
+                            "input_tokens": 10,
+                            "cached_input_tokens": 4,
+                            "output_tokens": 3,
+                        }
+                    },
+                },
+            },
+        ]
+
+        usage = collector._collect_sessions_usage([(Path("session.jsonl"), rows)])
+
+        self.assertEqual(len(usage), 1)
+        self.assertEqual(usage[0].model, "gpt-5.5")
+        self.assertEqual(usage[0].cache_read_tokens, 4)
+        self.assertEqual(usage[0].total_tokens, 17)
+
+    def test_claude_api_usage_parses_model_and_extra_windows(self) -> None:
+        parsed = ParsedUsage.from_api(
+            {
+                "five_hour": {"utilization": 10, "resets_at": "2026-05-21T12:00:00.000Z"},
+                "seven_day_opus": {"utilization": 42, "resets_at": "2026-05-22T12:00:00.000Z"},
+                "seven_day_cowork": {"utilization": 9, "resets_at": "2026-05-23T12:00:00.000Z"},
+                "extra_usage": {
+                    "is_enabled": True,
+                    "utilization": 25,
+                    "monthly_limit": 2000,
+                    "used_credits": 500,
+                    "currency": "USD",
+                },
+            }
+        )
+
+        names = [limit["name"] for limit in parsed.limits]
+        self.assertIn("5h", names)
+        self.assertIn("opus", names)
+        self.assertIn("cowork", names)
+        self.assertIn("extra", names)
+        self.assertIsNotNone(parsed.five_hour_reset_secs)
 
 
 if __name__ == "__main__":

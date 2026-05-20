@@ -129,29 +129,43 @@ class ClaudeCollector(Collector):
 
     def _collect_usage(self, rows_by_file: list[tuple[Path, list[dict[str, Any]]]]) -> list[UsageRecord]:
         usage: list[UsageRecord] = []
+        keyed_usage: dict[str, UsageRecord] = {}
         for fp, rows in rows_by_file:
             for obj in rows:
                 ub = _extract_usage(obj)
                 if not ub:
                     continue
                 session_id = _find_str(obj, ["sessionId", "session_id", "toolUseID"])
-                usage.append(
-                    UsageRecord(
-                        provider="claude",
-                        timestamp=_parse_ts(obj.get("timestamp")),
-                        input_tokens=_as_int(ub.get("input_tokens")),
-                        output_tokens=_as_int(ub.get("output_tokens")),
-                        cache_creation_tokens=_as_int(ub.get("cache_creation_input_tokens")),
-                        cache_read_tokens=_as_int(ub.get("cache_read_input_tokens")),
-                        total_tokens=_usage_total(ub),
-                        accuracy="real",
-                        source="projects_jsonl",
-                        project_path=_find_str(obj, ["cwd", "project"]),
-                        session_external_id=session_id,
-                        model=_find_str(obj, ["message.model", "model"]),
-                        metadata={"file": str(fp)},
-                    )
+                request_id = _find_str(obj, ["requestId", "request_id"])
+                message_id = _find_str(obj, ["message.id", "messageId", "message_id"])
+                metadata: dict[str, Any] = {"file": str(fp)}
+                if request_id:
+                    metadata["request_id"] = request_id
+                if message_id:
+                    metadata["message_id"] = message_id
+                record = UsageRecord(
+                    provider="claude",
+                    timestamp=_parse_ts(obj.get("timestamp")),
+                    input_tokens=_as_int(ub.get("input_tokens")),
+                    output_tokens=_as_int(ub.get("output_tokens")),
+                    cache_creation_tokens=_as_int(ub.get("cache_creation_input_tokens")),
+                    cache_read_tokens=_as_int(ub.get("cache_read_input_tokens")),
+                    total_tokens=_usage_total(ub),
+                    accuracy="real",
+                    source="projects_jsonl",
+                    project_path=_find_str(obj, ["cwd", "project"]),
+                    session_external_id=session_id,
+                    model=_find_str(obj, ["message.model", "model"]),
+                    metadata=metadata,
                 )
+                if message_id and request_id:
+                    key = f"{message_id}:{request_id}"
+                    previous = keyed_usage.get(key)
+                    if previous is None or record.timestamp >= previous.timestamp:
+                        keyed_usage[key] = record
+                else:
+                    usage.append(record)
+        usage.extend(sorted(keyed_usage.values(), key=lambda item: item.timestamp))
         return usage
 
     def _collect_stats_cache(self) -> list[UsageRecord]:

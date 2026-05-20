@@ -116,6 +116,7 @@ class ParsedUsage:
         "five_hour_reset_secs",
         "seven_day_pct",
         "seven_day_reset_secs",
+        "limits",
         "fetched_at",
     )
 
@@ -125,23 +126,27 @@ class ParsedUsage:
         five_hour_reset_secs: int | None,
         seven_day_pct: float | None,
         seven_day_reset_secs: int | None,
+        limits: list[dict[str, Any]],
         fetched_at: str,
     ) -> None:
         self.five_hour_pct = five_hour_pct
         self.five_hour_reset_secs = five_hour_reset_secs
         self.seven_day_pct = seven_day_pct
         self.seven_day_reset_secs = seven_day_reset_secs
+        self.limits = limits
         self.fetched_at = fetched_at
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> ParsedUsage:
         fh = data.get("five_hour") or {}
         sd = data.get("seven_day") or {}
+        limits = _parse_limits(data)
         return cls(
             five_hour_pct=_safe_float(fh.get("utilization")),
             five_hour_reset_secs=_reset_secs(fh.get("resets_at")),
             seven_day_pct=_safe_float(sd.get("utilization")),
             seven_day_reset_secs=_reset_secs(sd.get("resets_at")),
+            limits=limits,
             fetched_at=datetime.now(timezone.utc).strftime("%H:%M:%S"),
         )
 
@@ -157,11 +162,76 @@ def _reset_secs(v: Any) -> int | None:
     if v is None:
         return None
     try:
-        dt = datetime.fromisoformat(str(v))
+        dt = datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
         secs = int((dt - datetime.now(timezone.utc)).total_seconds())
         return max(0, secs)
     except Exception:
         return None
+
+
+def _parse_limits(data: dict[str, Any]) -> list[dict[str, Any]]:
+    definitions = [
+        ("five_hour", "5h", "usage"),
+        ("seven_day", "weekly", "usage"),
+        ("seven_day_oauth_apps", "oauth", "usage"),
+        ("seven_day_opus", "opus", "usage"),
+        ("seven_day_sonnet", "sonnet", "usage"),
+        ("sonnet_only", "sonnet", "usage"),
+        ("seven_day_cowork", "cowork", "usage"),
+        ("seven_day_design", "designs", "usage"),
+        ("seven_day_routines", "routines", "usage"),
+    ]
+    limits: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for key, label, kind in definitions:
+        value = data.get(key)
+        if not isinstance(value, dict):
+            continue
+        pct = _safe_float(value.get("utilization"))
+        if pct is None:
+            continue
+        dedupe_key = f"{label}:{kind}"
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        limits.append(
+            {
+                "name": label,
+                "kind": kind,
+                "pct": pct,
+                "reset_secs": _reset_secs(value.get("resets_at")),
+            }
+        )
+
+    extra = data.get("extra_usage")
+    if isinstance(extra, dict) and extra.get("is_enabled") is True:
+        used = _safe_float(extra.get("used_credits"))
+        limit = _safe_float(extra.get("monthly_limit"))
+        pct = _safe_float(extra.get("utilization"))
+        detail = _format_extra_usage(used, limit, extra.get("currency"))
+        limits.append(
+            {
+                "name": "extra",
+                "kind": "cost",
+                "pct": pct,
+                "reset_secs": _reset_secs(extra.get("resets_at")),
+                "detail": detail,
+            }
+        )
+    return limits
+
+
+def _format_extra_usage(used: float | None, limit: float | None, currency: Any) -> str | None:
+    if used is None:
+        return None
+    # Claude OAuth generally reports cents for subscription extra usage.
+    currency_text = str(currency or "USD").strip() or "USD"
+    used_major = used / 100.0
+    if limit is None or limit == 0:
+        return f"{currency_text} {used_major:.2f} spent"
+    return f"{currency_text} {used_major:.2f}/{limit / 100.0:.2f}"
 
 
 def _parse_token_from_env(path: Path) -> str | None:

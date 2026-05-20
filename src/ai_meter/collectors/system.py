@@ -72,7 +72,7 @@ class SystemCollector(Collector):
             return batch
 
         native = self._native_sampler.snapshot()
-        if native is None and include_temp:
+        if native is None and include_temp and self._native_sampler.available:
             time.sleep(1.0)
             native = self._native_sampler.snapshot()
         if native is not None:
@@ -149,6 +149,10 @@ class SystemCollector(Collector):
         return self._cached_cpu_freq_mhz
 
     def _get_cpu_name(self) -> str:
+        if os.name != "nt":
+            name = self._read_proc_cpu_name()
+            if name:
+                return name
         try:
             import winreg
             key = winreg.OpenKey(
@@ -164,9 +168,24 @@ class SystemCollector(Collector):
         except Exception:
             try:
                 import platform
-                return platform.processor()[:40]
+                return (platform.processor() or platform.machine() or "CPU")[:40]
             except Exception:
                 return "CPU"
+
+    def _read_proc_cpu_name(self) -> str | None:
+        cpuinfo = Path("/proc/cpuinfo")
+        if not cpuinfo.exists():
+            return None
+        try:
+            for line in cpuinfo.read_text(encoding="utf-8", errors="ignore").splitlines():
+                if line.lower().startswith(("model name", "hardware")):
+                    _, _, value = line.partition(":")
+                    name = value.strip()
+                    if name:
+                        return name[:40]
+        except OSError:
+            return None
+        return None
 
     def _refresh_core_loads_fast(self) -> None:
         """Refresh per-core loads from cpu_times deltas on the light loop cadence."""
@@ -265,11 +284,14 @@ class SystemCollector(Collector):
             }
 
         if obj is None:
-            # Fallback: try WMI for CPU temp only
-            wmi_temp, wmi_source = self._read_wmi_temp_fallback()
-            if wmi_temp is not None:
-                self._cached_cpu_temp_c = wmi_temp
-                self._cached_cpu_temp_source = _shorten_source(wmi_source)
+            # Fallback: platform-safe CPU temperature only.
+            fallback_temp, fallback_source = self._read_platform_temp_fallback()
+            if fallback_temp is not None:
+                self._cached_cpu_temp_c = fallback_temp
+                self._cached_cpu_temp_source = _shorten_source(fallback_source)
+            else:
+                self._cached_cpu_temp_c = None
+                self._cached_cpu_temp_source = _shorten_source(fallback_source)
             return
 
         from_service = bool(obj.get("_from_service"))
@@ -288,11 +310,11 @@ class SystemCollector(Collector):
             self._cached_cpu_temp_c = float(cpu_temp)
             self._cached_cpu_temp_source = _shorten_source(str(obj.get("source") or "lhm"))
         else:
-            # CPU temp unavailable from probe — try WMI as fallback
-            wmi_temp, wmi_source = self._read_wmi_temp_fallback()
-            if wmi_temp is not None:
-                self._cached_cpu_temp_c = wmi_temp
-                self._cached_cpu_temp_source = _shorten_source(wmi_source)
+            # CPU temp unavailable from probe — try platform fallback.
+            fallback_temp, fallback_source = self._read_platform_temp_fallback()
+            if fallback_temp is not None:
+                self._cached_cpu_temp_c = fallback_temp
+                self._cached_cpu_temp_source = _shorten_source(fallback_source)
             else:
                 self._cached_cpu_temp_c = None
                 self._cached_cpu_temp_source = _shorten_source(str(obj.get("source") or "unknown"))
@@ -314,6 +336,46 @@ class SystemCollector(Collector):
             ]
         else:
             self._cached_core_loads = []
+
+    def _read_platform_temp_fallback(self) -> tuple[float | None, str]:
+        if os.name == "nt":
+            return self._read_wmi_temp_fallback()
+        return self._read_linux_temp_fallback()
+
+    def _read_linux_temp_fallback(self) -> tuple[float | None, str]:
+        if psutil is None or not hasattr(psutil, "sensors_temperatures"):
+            return None, "linux:no_sensors"
+        try:
+            sensors = psutil.sensors_temperatures(fahrenheit=False)
+        except Exception:
+            return None, "linux:sensors_failed"
+        best: tuple[int, float, str] | None = None
+        hot_labels = ("package", "tctl", "tdie")
+        acceptable_labels = ("cpu", "core")
+        for chip, entries in sensors.items():
+            if not isinstance(entries, (list, tuple)):
+                continue
+            for entry in entries:
+                current = getattr(entry, "current", None)
+                label = str(getattr(entry, "label", "") or chip)
+                if not isinstance(current, (int, float)):
+                    continue
+                temp = float(current)
+                if not 5.0 <= temp <= 130.0:
+                    continue
+                source = f"linux:{chip}:{label}"
+                haystack = f"{chip} {label}".lower()
+                if any(token in haystack for token in hot_labels):
+                    score = 2
+                elif any(token in haystack for token in acceptable_labels):
+                    score = 1
+                else:
+                    score = 0
+                if best is None or score > best[0] or (score == best[0] and temp > best[1]):
+                    best = (score, temp, source)
+        if best is None:
+            return None, "linux:no_data"
+        return best[1], best[2]
 
     def _read_service_file(self) -> dict[str, Any] | None:
         """Read sensor data written by the legacy background scheduled task."""
@@ -427,15 +489,19 @@ class NativeWinProbeSampler:
         self._lock = threading.Lock()
 
     def snapshot(self) -> dict[str, Any] | None:
-        if os.name != "nt" or self._exe is None:
+        if not self.available:
             return None
         self._start()
         with self._lock:
             return dict(self._latest) if self._latest is not None else None
 
+    @property
+    def available(self) -> bool:
+        return os.name == "nt" and self._exe is not None
+
     def status(self) -> dict[str, Any]:
         return {
-            "available": self._exe is not None,
+            "available": self.available,
             "path": str(self._exe) if self._exe is not None else None,
             "started": self._started,
             "stream_interval_ms": self._stream_interval_ms,

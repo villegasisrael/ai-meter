@@ -6,7 +6,8 @@ La TUI debe seguir fluida sin bloquear render por IO, subprocess o parseo grande
 
 ## Costos
 
-- `winprobe`: `app.winprobe_interval_ms`, default 250ms.
+- `winprobe`: solo Windows, `app.winprobe_interval_ms`, default 250ms.
+- Linux/Ubuntu: sistema rapido via `psutil`.
 - Light collect: `app.collector_light_interval_ms`, default 250ms.
 - Heavy collect: `app.collector_heavy_interval_s`, default 10s.
 - Claude API: opt-in, `providers.claude.usage_api_interval_s`, default 900s.
