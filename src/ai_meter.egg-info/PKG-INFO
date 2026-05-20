@@ -25,65 +25,26 @@ Dynamic: license-file
 
 # ai-meter
 
-Monitor TUI local para Windows con uso de Codex/Claude y metricas del sistema en tiempo real.
+Monitor TUI local para Windows. Muestra uso de Codex/Claude, actividad reciente y metricas del sistema sin llamadas a modelos.
 
-El objetivo es mostrar datos reales sin llamadas a modelos: plan, limites visibles, tokens observados, actividad local, CPU/RAM/disk/net, cores, GPU y temperatura cuando el equipo lo permite.
-
-## Estado
-
-- Proyecto local-first para Windows.
-- Licencia: Apache-2.0.
-- No hace llamadas a modelos.
-- La API de uso de Claude es opcional y esta deshabilitada por defecto.
-
-## Requisitos
-
-- Windows 10/11.
-- Python 3.11 o superior.
-- PowerShell.
-- Opcional para build nativo: .NET 6 SDK y `g++`/MinGW.
-
-## Instalacion Desde Source
-
-```powershell
-git clone <repo-url>
-cd ai-meter
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -U pip
-pip install -e .
-```
-
-Ejecutar:
-
-```powershell
-ai-meter run
-```
-
-Si prefieres no activar la venv:
+## Uso
 
 ```powershell
 $env:PYTHONPATH='src'
 python -m ai_meter.main run
+python -m ai_meter.main doctor
+python -m ai_meter.main paths
 ```
 
-Diagnostico:
+Si esta instalado como entrypoint:
 
 ```powershell
+ai-meter run
 ai-meter doctor
 ai-meter paths
 ```
 
-`paths` muestra la ubicacion real del `config.toml`.
-
-## Que Muestra
-
-- Codex: plan actual, uso 5h/semanal, reset y tokens observados.
-- Claude: plan local, tokens/eventos observados y limites 5h/semanal solo si la API OAuth opcional esta habilitada.
-- System: CPU history, CPU total, cores, RAM, disk, red, temperatura CPU/GPU y procesos.
-- Live Activity: eventos recientes de Codex/Claude con hora local.
-
-## Fuentes Principales
+## Datos
 
 | Dato | Fuente principal | Fallback |
 | --- | --- | --- |
@@ -93,57 +54,34 @@ ai-meter paths
 | Claude tokens/eventos | `~/.claude/projects/**/*.jsonl` | `stats-cache.json` |
 | Claude limites 5h/semanal | OAuth usage API opcional | `unknown` |
 | CPU/RAM/disk/net | `ai-meter-winprobe.exe` | `psutil` |
-| CPU cores | `psutil.cpu_times(percpu=True)` por delta | sensor probe |
-| CPU/GPU temp | `C:\ProgramData\ai-meter\sensor.json` | probe directo / WMI |
+| CPU cores | `psutil.cpu_times(percpu=True)` por delta | `unknown` |
+| CPU/GPU temp | WMI confiable si existe | `unknown` |
 
-Codex no expone el limite absoluto en tokens/unidades; expone porcentaje usado, ventana y reset. Por eso la UI muestra `% usado` y `reset`, no un numero absoluto inventado.
+La temperatura puede quedar en `unknown`. No se instala ningun driver kernel para leer sensores.
 
-## Temperatura CPU
+## Anti-Tampering / driver legacy
 
-La temperatura CPU puede requerir acceso a driver/kernel. Instalar la tarea de fondo una vez desde PowerShell como administrador:
+Versiones anteriores podian usar `ai-meter-sensor-probe` con LibreHardwareMonitor/WinRing0 para temperatura. Ese camino esta deshabilitado porque Windows/EDR puede bloquearlo como controlador vulnerable.
 
-```powershell
-cd ai-meter
-ai-meter install-service
-```
-
-Esto registra `ai-meter-sensor` y escribe:
-
-```text
-C:\ProgramData\ai-meter\sensor.json
-```
-
-Desinstalar:
+Si aparece un aviso sobre `ai-meter-sensor-probe.sys`, limpiar restos legacy como administrador:
 
 ```powershell
-ai-meter uninstall-service
+python -m ai_meter.main uninstall-service
+Remove-Item "$env:ProgramData\ai-meter\sensor.json" -Force -ErrorAction SilentlyContinue
+Remove-Item ".\src\ai_meter\bin\win-x64\ai-meter-sensor-probe.sys" -Force -ErrorAction SilentlyContinue
 ```
 
-## Claude API
+No desactivar Memory Integrity/HVCI para ai-meter.
 
-Los limites reales 5h/semanal de Claude no tienen una fuente local confiable. Por defecto se muestran `unknown` y se usan solo tokens/eventos locales.
+## Configuracion
 
-Para habilitar la API opcional, editar config:
+El archivo real se ve con:
 
-```toml
-[providers.claude]
-usage_api_enabled = true
-usage_api_interval_s = 900
+```powershell
+python -m ai_meter.main paths
 ```
 
-Y crear `.env` en la raiz:
-
-```text
-TOKEN = Bearer sk-ant-oat01--TU_TOKEN_AQUI
-```
-
-Puedes partir de `.env.example`.
-
-La consulta va a `https://api.anthropic.com/api/oauth/usage`. No consume tokens de modelo. Si responde `401`, el token expiro o no sirve. Si responde `429`, la app aplica backoff.
-
-## Proveedores
-
-En el config se puede mostrar Claude y Codex, solo Claude o solo Codex:
+Opciones habituales:
 
 ```toml
 [providers.codex]
@@ -151,92 +89,36 @@ enabled = true
 
 [providers.claude]
 enabled = true
-```
+usage_api_enabled = false
+usage_api_interval_s = 900
 
-## Performance
-
-La TUI separa render, metricas rapidas y collectors pesados. Valores utiles en `config.toml`:
-
-```toml
 [app]
-refresh_interval_ms = 1000
-collector_light_interval_ms = 250
-collector_heavy_interval_s = 10
-winprobe_interval_ms = 250
-
-[ui]
-cpu_render_interval_ms = 250
-system_render_interval_ms = 500
-ai_render_interval_ms = 1000
-events_render_interval_ms = 500
+persist_history = false
 ```
 
-Para maquinas lentas, subir `refresh_interval_ms`, `collector_light_interval_ms` y los intervalos de render.
-
-## Controles
-
-| Tecla | Accion |
-| --- | --- |
-| `+` / `=` | Refresh mas lento |
-| `-` | Refresh mas rapido |
-| `r` | Actualizar ahora |
-| `p` | Pausar / reanudar |
-| `c` | Mostrar / ocultar panel Claude |
-| `x` | Mostrar / ocultar panel Codex |
-| `h` | Ayuda |
-| `q` | Salir |
-
-Rango de refresh: 100ms a 5000ms.
-
-## Build
-
-Binarios nativos:
+## Build y pruebas
 
 ```powershell
 .\scripts\build_native.ps1
-```
-
-EXE:
-
-```powershell
 .\scripts\build_exe.ps1
-```
-
-## Pruebas
-
-```powershell
-$env:PYTHONPATH='src'
-python -m unittest discover -s tests
+$env:PYTHONPATH='src'; python -m unittest discover -s tests
 python -m compileall src\ai_meter
 ```
 
-## Contribuir
-
-- Mantener `model-calls=off`.
-- Preferir fuentes locales y mostrar `unknown` si un dato no es confiable.
-- No guardar historial salvo que `persist_history=true`.
-- Mantener collectors pesados fuera del hot path.
-- Correr `unittest` y `compileall` antes de proponer cambios.
-
 ## Documentacion
 
-- `AGENTS.md`: instrucciones para agentes.
-- `docs/architecture.md`: arquitectura y ciclos.
-- `docs/data-sources.md`: fuentes de datos y confiabilidad.
+- `AGENTS.md`: reglas del repo para agentes.
+- `docs/architecture.md`: flujo interno y ciclos.
+- `docs/data-sources.md`: fuentes y confiabilidad.
 - `docs/operations.md`: comandos operativos.
 - `docs/performance.md`: hot path y costos.
-- `docs/troubleshooting.md`: problemas comunes.
-- `docs/progress.md`: estado actual y pendientes.
+- `docs/troubleshooting.md`: diagnostico puntual.
 
 ## Privacidad
 
-- `model-calls=off` siempre.
+- No hay llamadas a modelos.
 - Los archivos locales de Codex/Claude se leen en el equipo.
-- Secrets se redactan antes de guardar/mostrar metadata.
-- La API Claude solo recibe el token OAuth cuando `usage_api_enabled=true` y `TOKEN` existe.
+- Secrets se redactan antes de guardar o mostrar metadata.
+- SQLite solo se usa si `persist_history=true`.
 
-## Licencia
-
-Apache License 2.0. Ver `LICENSE`.
-
-Dependencias de terceros: ver `THIRD_PARTY_NOTICES.md`.
+Licencia: Apache-2.0. Ver `LICENSE`.
