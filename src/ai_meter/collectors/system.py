@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import csv
 import json
 import os
+import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -44,6 +47,8 @@ class SystemCollector(Collector):
         self._cached_cpu_temp_source: str = "unknown"
         self._cached_gpu_temp_c: float | None = None
         self._cached_gpu_name: str | None = None
+        self._cached_gpu_temp_source: str = "unknown"
+        self._cached_gpu_temps: list[dict[str, Any]] = []
         self._cached_core_loads: list[dict[str, Any]] = []
         self._cached_needs_admin: bool = False
         self._last_temp_probe_meta: dict[str, Any] = {}
@@ -125,6 +130,8 @@ class SystemCollector(Collector):
         meta["cpu_temp_probe"] = dict(self._last_temp_probe_meta)
         meta["gpu_temp_c"] = self._cached_gpu_temp_c
         meta["gpu_name"] = self._cached_gpu_name
+        meta["gpu_temp_source"] = self._cached_gpu_temp_source
+        meta["gpu_temps"] = list(self._cached_gpu_temps)
         meta["core_loads"] = list(self._cached_core_loads)
         meta["needs_admin"] = self._cached_needs_admin
         meta["cpu_name"] = self._cpu_name
@@ -284,14 +291,7 @@ class SystemCollector(Collector):
             }
 
         if obj is None:
-            # Fallback: platform-safe CPU temperature only.
-            fallback_temp, fallback_source = self._read_platform_temp_fallback()
-            if fallback_temp is not None:
-                self._cached_cpu_temp_c = fallback_temp
-                self._cached_cpu_temp_source = _shorten_source(fallback_source)
-            else:
-                self._cached_cpu_temp_c = None
-                self._cached_cpu_temp_source = _shorten_source(fallback_source)
+            self._refresh_platform_temp_fallbacks()
             return
 
         from_service = bool(obj.get("_from_service"))
@@ -310,7 +310,7 @@ class SystemCollector(Collector):
             self._cached_cpu_temp_c = float(cpu_temp)
             self._cached_cpu_temp_source = _shorten_source(str(obj.get("source") or "lhm"))
         else:
-            # CPU temp unavailable from probe — try platform fallback.
+            # CPU temp unavailable from probe; try platform fallback.
             fallback_temp, fallback_source = self._read_platform_temp_fallback()
             if fallback_temp is not None:
                 self._cached_cpu_temp_c = fallback_temp
@@ -323,9 +323,16 @@ class SystemCollector(Collector):
         if isinstance(gpu_temp, (int, float)) and 5.0 <= float(gpu_temp) <= 130.0:
             self._cached_gpu_temp_c = float(gpu_temp)
             self._cached_gpu_name = str(obj.get("gpu_name") or "GPU")
+            self._cached_gpu_temp_source = _shorten_source(str(obj.get("source") or "probe"))
+            self._cached_gpu_temps = [
+                {
+                    "name": self._cached_gpu_name,
+                    "temp_c": self._cached_gpu_temp_c,
+                    "source": self._cached_gpu_temp_source,
+                }
+            ]
         else:
-            self._cached_gpu_temp_c = None
-            self._cached_gpu_name = None
+            self._refresh_platform_gpu_temp_fallback()
 
         core_loads = obj.get("core_loads")
         if isinstance(core_loads, list) and core_loads:
@@ -337,18 +344,54 @@ class SystemCollector(Collector):
         else:
             self._cached_core_loads = []
 
+    def _refresh_platform_temp_fallbacks(self) -> None:
+        fallback_temp, fallback_source = self._read_platform_temp_fallback()
+        if fallback_temp is not None:
+            self._cached_cpu_temp_c = fallback_temp
+            self._cached_cpu_temp_source = _shorten_source(fallback_source)
+        else:
+            self._cached_cpu_temp_c = None
+            self._cached_cpu_temp_source = _shorten_source(fallback_source)
+        self._refresh_platform_gpu_temp_fallback()
+
+    def _refresh_platform_gpu_temp_fallback(self) -> None:
+        gpu_temp, gpu_name, gpu_source, all_readings = self._read_platform_gpu_temp_fallback()
+        self._cached_gpu_temps = all_readings
+        if gpu_temp is None:
+            self._cached_gpu_temp_c = None
+            self._cached_gpu_name = None
+            self._cached_gpu_temp_source = _shorten_source(gpu_source)
+            return
+        self._cached_gpu_temp_c = gpu_temp
+        self._cached_gpu_name = gpu_name or "GPU"
+        self._cached_gpu_temp_source = _shorten_source(gpu_source)
+
     def _read_platform_temp_fallback(self) -> tuple[float | None, str]:
         if os.name == "nt":
             return self._read_wmi_temp_fallback()
         return self._read_linux_temp_fallback()
 
     def _read_linux_temp_fallback(self) -> tuple[float | None, str]:
+        temp, source = self._read_psutil_cpu_temp_fallback()
+        if temp is not None:
+            return temp, source
+        return self._read_linux_hwmon_cpu_temp_fallback()
+
+    def _read_psutil_cpu_temp_fallback(self) -> tuple[float | None, str]:
         if psutil is None or not hasattr(psutil, "sensors_temperatures"):
             return None, "linux:no_sensors"
         try:
             sensors = psutil.sensors_temperatures(fahrenheit=False)
         except Exception:
             return None, "linux:sensors_failed"
+        readings = self._cpu_readings_from_psutil_sensors(sensors)
+        reading = _best_temp_reading(readings)
+        if reading is None:
+            return None, "linux:no_data"
+        return reading["temp_c"], reading["source"]
+
+    def _cpu_readings_from_psutil_sensors(self, sensors: dict[str, Any]) -> list[dict[str, Any]]:
+        readings: list[dict[str, Any]] = []
         best: tuple[int, float, str] | None = None
         hot_labels = ("package", "tctl", "tdie")
         acceptable_labels = ("cpu", "core")
@@ -365,6 +408,8 @@ class SystemCollector(Collector):
                     continue
                 source = f"linux:{chip}:{label}"
                 haystack = f"{chip} {label}".lower()
+                if not _looks_like_cpu_temp_source(haystack):
+                    continue
                 if any(token in haystack for token in hot_labels):
                     score = 2
                 elif any(token in haystack for token in acceptable_labels):
@@ -373,9 +418,210 @@ class SystemCollector(Collector):
                     score = 0
                 if best is None or score > best[0] or (score == best[0] and temp > best[1]):
                     best = (score, temp, source)
-        if best is None:
+        if best is not None:
+            readings.append({"name": "CPU", "temp_c": best[1], "source": best[2]})
+        return readings
+
+    def _read_linux_hwmon_cpu_temp_fallback(self) -> tuple[float | None, str]:
+        readings: list[dict[str, Any]] = []
+        for sensor in _linux_hwmon_temperature_readings():
+            haystack = f"{sensor.get('chip', '')} {sensor.get('label', '')}".lower()
+            if not _looks_like_cpu_temp_source(haystack):
+                continue
+            readings.append(
+                {
+                    "name": "CPU",
+                    "temp_c": sensor["temp_c"],
+                    "source": f"linux:hwmon:{sensor.get('chip')}:{sensor.get('label')}",
+                }
+            )
+        reading = _best_temp_reading(readings)
+        if reading is None:
             return None, "linux:no_data"
-        return best[1], best[2]
+        return reading["temp_c"], reading["source"]
+
+    def _read_platform_gpu_temp_fallback(
+        self,
+    ) -> tuple[float | None, str | None, str, list[dict[str, Any]]]:
+        readings: list[dict[str, Any]] = []
+        readings.extend(self._read_nvidia_smi_gpu_temps())
+        readings.extend(self._read_amd_smi_gpu_temps())
+        if os.name != "nt":
+            readings.extend(self._read_rocm_smi_gpu_temps())
+            readings.extend(self._read_linux_gpu_temp_fallback())
+        else:
+            readings.extend(self._read_wmi_gpu_temp_fallback())
+
+        readings = _dedupe_temp_readings(readings)
+        best = _best_temp_reading(readings)
+        if best is None:
+            source = "gpu:no_data"
+            has_gpu_tool = (
+                _find_command("nvidia-smi", extra_paths=_nvidia_smi_candidate_paths())
+                or _find_command("amd-smi", extra_paths=_amd_smi_candidate_paths())
+                or _find_command("rocm-smi", extra_paths=_rocm_smi_candidate_paths())
+                or _find_command("rocm-smi.py", extra_paths=_rocm_smi_candidate_paths())
+            )
+            if not has_gpu_tool:
+                source = "gpu:no_tool"
+            return None, None, source, []
+        return best["temp_c"], best.get("name"), str(best.get("source") or "gpu"), readings
+
+    def _read_nvidia_smi_gpu_temps(self) -> list[dict[str, Any]]:
+        exe = _find_command("nvidia-smi", extra_paths=_nvidia_smi_candidate_paths())
+        if exe is None:
+            return []
+        try:
+            out = subprocess.run(
+                [
+                    str(exe),
+                    "--query-gpu=name,temperature.gpu",
+                    "--format=csv,noheader,nounits",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=2.0,
+                check=False,
+                startupinfo=_hidden_startupinfo(),
+            )
+        except Exception:
+            return []
+        return _parse_csv_gpu_temperatures(out.stdout, source="nvidia-smi")
+
+    def _read_amd_smi_gpu_temps(self) -> list[dict[str, Any]]:
+        exe = _find_command("amd-smi", extra_paths=_amd_smi_candidate_paths())
+        if exe is None:
+            return []
+        commands = (
+            [str(exe), "metric", "--temperature", "--json"],
+            [str(exe), "monitor", "--temperature", "--json"],
+            [str(exe), "monitor", "--temperature"],
+        )
+        for command in commands:
+            try:
+                out = subprocess.run(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    timeout=2.5,
+                    check=False,
+                    startupinfo=_hidden_startupinfo(),
+                )
+            except Exception:
+                continue
+            payload = (out.stdout or "").strip()
+            if not payload:
+                continue
+            readings = _parse_gpu_tool_output(payload, source="amd-smi")
+            if readings:
+                return readings
+        return []
+
+    def _read_rocm_smi_gpu_temps(self) -> list[dict[str, Any]]:
+        exe = _find_command("rocm-smi", extra_paths=_rocm_smi_candidate_paths())
+        if exe is None:
+            exe = _find_command("rocm-smi.py", extra_paths=_rocm_smi_candidate_paths())
+        if exe is None:
+            return []
+        try:
+            out = subprocess.run(
+                [str(exe), "--showtemp", "--json"],
+                capture_output=True,
+                text=True,
+                timeout=2.5,
+                check=False,
+                startupinfo=_hidden_startupinfo(),
+            )
+        except Exception:
+            return []
+        return _parse_gpu_tool_output(out.stdout or "", source="rocm-smi")
+
+    def _read_linux_gpu_temp_fallback(self) -> list[dict[str, Any]]:
+        readings: list[dict[str, Any]] = []
+        if psutil is not None and hasattr(psutil, "sensors_temperatures"):
+            try:
+                sensors = psutil.sensors_temperatures(fahrenheit=False)
+            except Exception:
+                sensors = {}
+            readings.extend(_gpu_readings_from_psutil_sensors(sensors))
+
+        for sensor in _linux_hwmon_temperature_readings():
+            haystack = f"{sensor.get('chip', '')} {sensor.get('label', '')}".lower()
+            if not _looks_like_gpu_temp_source(haystack):
+                continue
+            chip = str(sensor.get("chip") or "GPU")
+            readings.append(
+                {
+                    "name": _gpu_name_from_chip(chip),
+                    "temp_c": sensor["temp_c"],
+                    "source": f"linux:hwmon:{chip}:{sensor.get('label')}",
+                }
+            )
+        return readings
+
+    def _read_wmi_gpu_temp_fallback(self) -> list[dict[str, Any]]:
+        script = r"""
+$ErrorActionPreference = 'SilentlyContinue'
+$items = @()
+$namespaces = @('root/LibreHardwareMonitor','root/OpenHardwareMonitor')
+foreach ($ns in $namespaces) {
+    try {
+        $sensors = Get-CimInstance -Namespace $ns -ClassName Sensor |
+            Where-Object {
+                $_.SensorType -eq 'Temperature' -and
+                (
+                    $_.Identifier -match 'gpu|nvidia|amd|ati|radeon' -or
+                    $_.Name -match 'GPU|Hot Spot|Junction|Memory'
+                )
+            }
+        foreach ($sensor in $sensors) {
+            if ($sensor.Value -ge 5 -and $sensor.Value -le 130) {
+                $items += [PSCustomObject]@{
+                    name = if ($sensor.Identifier -match 'nvidia') { 'NVIDIA GPU' } elseif ($sensor.Identifier -match 'amd|ati|radeon') { 'AMD GPU' } else { 'GPU' }
+                    temp_c = [double]$sensor.Value
+                    source = $ns + ':' + $sensor.Name
+                }
+            }
+        }
+        if ($items.Count -gt 0) { break }
+    } catch {}
+}
+if ($items.Count -gt 0) { $items | ConvertTo-Json -Compress } else { '' }
+"""
+        try:
+            out = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", script],
+                capture_output=True,
+                text=True,
+                timeout=5.0,
+                check=False,
+                startupinfo=_hidden_startupinfo(),
+            )
+        except Exception:
+            return []
+        payload = (out.stdout or "").strip()
+        if not payload:
+            return []
+        try:
+            obj = json.loads(payload)
+        except json.JSONDecodeError:
+            return []
+        rows = obj if isinstance(obj, list) else [obj]
+        readings: list[dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            temp = _parse_temp_value(row.get("temp_c"))
+            if temp is None:
+                continue
+            readings.append(
+                {
+                    "name": str(row.get("name") or "GPU"),
+                    "temp_c": temp,
+                    "source": str(row.get("source") or "wmi:gpu"),
+                }
+            )
+        return readings
 
     def _read_service_file(self) -> dict[str, Any] | None:
         """Read sensor data written by the legacy background scheduled task."""
@@ -423,7 +669,7 @@ class SystemCollector(Collector):
             return None
 
     def _read_wmi_temp_fallback(self) -> tuple[float | None, str]:
-        """PowerShell WMI fallback — works when running as admin."""
+        """PowerShell WMI fallback; works when running as admin."""
         script = r"""
 $ErrorActionPreference = 'SilentlyContinue'
 $result = $null
@@ -545,6 +791,301 @@ class NativeWinProbeSampler:
             if isinstance(obj, dict):
                 with self._lock:
                     self._latest = obj
+
+
+def _parse_csv_gpu_temperatures(text: str, source: str) -> list[dict[str, Any]]:
+    readings: list[dict[str, Any]] = []
+    for row in csv.reader((text or "").splitlines()):
+        if len(row) < 2:
+            continue
+        name = row[0].strip() or "GPU"
+        temp = _parse_temp_value(row[1])
+        if temp is None:
+            continue
+        readings.append({"name": name, "temp_c": temp, "source": source})
+    return readings
+
+
+def _parse_gpu_tool_output(text: str, source: str) -> list[dict[str, Any]]:
+    payload = (text or "").strip()
+    if not payload:
+        return []
+    try:
+        obj = json.loads(payload)
+    except json.JSONDecodeError:
+        return _parse_gpu_temperature_table(payload, source)
+    readings: list[dict[str, Any]] = []
+    _collect_gpu_json_readings(obj, source=source, readings=readings)
+    return readings
+
+
+def _collect_gpu_json_readings(
+    obj: Any,
+    source: str,
+    readings: list[dict[str, Any]],
+    name_hint: str | None = None,
+) -> None:
+    if isinstance(obj, list):
+        for item in obj:
+            _collect_gpu_json_readings(item, source, readings, name_hint)
+        return
+    if not isinstance(obj, dict):
+        return
+
+    local_name = name_hint
+    for key, value in obj.items():
+        key_l = str(key).lower()
+        if any(token in key_l for token in ("product", "name", "card", "gpu")) and isinstance(value, str):
+            if "temp" not in key_l and value.strip():
+                local_name = value.strip()
+                break
+
+    for key, value in obj.items():
+        key_text = str(key)
+        key_l = key_text.lower()
+        if isinstance(value, (dict, list)):
+            next_name = local_name
+            if re.match(r"^(card|gpu)\s*\d+$", key_l) or re.match(r"^(card|gpu)\d+$", key_l):
+                next_name = key_text.upper().replace("CARD", "AMD GPU ")
+            _collect_gpu_json_readings(value, source, readings, next_name)
+            continue
+
+        if "temp" not in key_l and "gpu_t" not in key_l and "edge" not in key_l and "junction" not in key_l:
+            continue
+        if any(token in key_l for token in ("limit", "critical", "throttle", "shutdown")):
+            continue
+        temp = _parse_temp_value(value)
+        if temp is None:
+            continue
+        name = local_name or "GPU"
+        readings.append({"name": name, "temp_c": temp, "source": f"{source}:{key_text}"})
+
+
+def _parse_gpu_temperature_table(text: str, source: str) -> list[dict[str, Any]]:
+    readings: list[dict[str, Any]] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.lower().startswith(("gpu ", "=", "-")):
+            continue
+        if not re.match(r"^\d+\s+", stripped):
+            continue
+        matches = re.findall(r"([-+]?\d+(?:\.\d+)?)\s*(?:\u00b0\s*)?C\b", stripped, flags=re.IGNORECASE)
+        if not matches:
+            continue
+        temp = _parse_temp_value(matches[0])
+        if temp is None:
+            continue
+        gpu_id = stripped.split()[0]
+        readings.append({"name": f"AMD GPU {gpu_id}", "temp_c": temp, "source": source})
+    return readings
+
+
+def _gpu_readings_from_psutil_sensors(sensors: dict[str, Any]) -> list[dict[str, Any]]:
+    readings: list[dict[str, Any]] = []
+    for chip, entries in sensors.items():
+        if not isinstance(entries, (list, tuple)):
+            continue
+        for entry in entries:
+            label = str(getattr(entry, "label", "") or chip)
+            haystack = f"{chip} {label}".lower()
+            if not _looks_like_gpu_temp_source(haystack):
+                continue
+            temp = _parse_temp_value(getattr(entry, "current", None))
+            if temp is None:
+                continue
+            readings.append(
+                {
+                    "name": _gpu_name_from_chip(str(chip)),
+                    "temp_c": temp,
+                    "source": f"linux:{chip}:{label}",
+                }
+            )
+    return readings
+
+
+def _linux_hwmon_temperature_readings() -> list[dict[str, Any]]:
+    root = Path("/sys/class/hwmon")
+    if not root.exists():
+        return []
+    readings: list[dict[str, Any]] = []
+    try:
+        hwmons = list(root.glob("hwmon*"))
+    except OSError:
+        return []
+    for hwmon in hwmons:
+        try:
+            chip = (hwmon / "name").read_text(encoding="utf-8", errors="ignore").strip()
+        except OSError:
+            chip = hwmon.name
+        try:
+            inputs = list(hwmon.glob("temp*_input"))
+        except OSError:
+            continue
+        for input_file in inputs:
+            match = re.match(r"temp(\d+)_input", input_file.name)
+            if match is None:
+                continue
+            idx = match.group(1)
+            try:
+                raw = input_file.read_text(encoding="utf-8", errors="ignore").strip()
+            except OSError:
+                continue
+            temp = _parse_temp_value(raw)
+            if temp is None:
+                continue
+            if temp > 1000.0:
+                temp = round(temp / 1000.0, 1)
+            try:
+                label = (hwmon / f"temp{idx}_label").read_text(
+                    encoding="utf-8",
+                    errors="ignore",
+                ).strip()
+            except OSError:
+                label = f"temp{idx}"
+            readings.append({"chip": chip, "label": label, "temp_c": temp})
+    return readings
+
+
+def _looks_like_cpu_temp_source(text: str) -> bool:
+    haystack = text.lower()
+    if any(token in haystack for token in ("amdgpu", "radeon", "nvidia", "nouveau", "gpu", "nvme", "wifi", "iwlwifi", "battery")):
+        return False
+    return any(
+        token in haystack
+        for token in (
+            "k10temp",
+            "coretemp",
+            "zenpower",
+            "cpu",
+            "package",
+            "tctl",
+            "tdie",
+            "tccd",
+            "ccd",
+            "acpitz",
+            "x86_pkg_temp",
+        )
+    )
+
+
+def _looks_like_gpu_temp_source(text: str) -> bool:
+    haystack = text.lower()
+    if "gpu" in haystack:
+        return True
+    return any(token in haystack for token in ("amdgpu", "radeon", "nvidia", "nouveau"))
+
+
+def _gpu_name_from_chip(chip: str) -> str:
+    lower = chip.lower()
+    if "amdgpu" in lower or "radeon" in lower:
+        return "AMD GPU"
+    if "nvidia" in lower or "nouveau" in lower:
+        return "NVIDIA GPU"
+    return chip or "GPU"
+
+
+def _parse_temp_value(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        temp = float(value)
+    else:
+        match = re.search(r"[-+]?\d+(?:\.\d+)?", str(value))
+        if match is None:
+            return None
+        try:
+            temp = float(match.group(0))
+        except ValueError:
+            return None
+    if temp > 1000.0:
+        temp = round(temp / 1000.0, 1)
+    if not 5.0 <= temp <= 130.0:
+        return None
+    return round(temp, 1)
+
+
+def _best_temp_reading(readings: list[dict[str, Any]]) -> dict[str, Any] | None:
+    valid = [r for r in readings if isinstance(r.get("temp_c"), (int, float))]
+    if not valid:
+        return None
+    return max(valid, key=lambda row: float(row.get("temp_c") or 0.0))
+
+
+def _dedupe_temp_readings(readings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[tuple[str, str]] = set()
+    deduped: list[dict[str, Any]] = []
+    for reading in readings:
+        temp = _parse_temp_value(reading.get("temp_c"))
+        if temp is None:
+            continue
+        name = str(reading.get("name") or "GPU")
+        source = str(reading.get("source") or "gpu")
+        key = (name.lower(), source.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append({"name": name, "temp_c": temp, "source": source})
+    return deduped
+
+
+def _find_command(name: str, extra_paths: list[Path] | None = None) -> Path | None:
+    found = shutil.which(name)
+    if found:
+        return Path(found)
+    if os.name == "nt" and not name.lower().endswith(".exe"):
+        found = shutil.which(f"{name}.exe")
+        if found:
+            return Path(found)
+    for candidate in extra_paths or []:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _nvidia_smi_candidate_paths() -> list[Path]:
+    if os.name != "nt":
+        return []
+    roots = [
+        os.environ.get("ProgramFiles"),
+        os.environ.get("ProgramW6432"),
+        os.environ.get("SystemRoot"),
+    ]
+    candidates: list[Path] = []
+    for root in [Path(r) for r in roots if r]:
+        candidates.extend(
+            [
+                root / "NVIDIA Corporation" / "NVSMI" / "nvidia-smi.exe",
+                root / "System32" / "nvidia-smi.exe",
+            ]
+        )
+    return candidates
+
+
+def _amd_smi_candidate_paths() -> list[Path]:
+    candidates: list[Path] = []
+    if os.name == "nt":
+        roots = [os.environ.get("ProgramFiles"), os.environ.get("ProgramW6432")]
+        for root_text in [r for r in roots if r]:
+            root = Path(root_text) / "AMD" / "ROCm"
+            try:
+                candidates.extend(root.glob("*/*/amd-smi.exe"))
+                candidates.extend(root.glob("*/bin/amd-smi.exe"))
+            except OSError:
+                pass
+    else:
+        candidates.extend([Path("/opt/rocm/bin/amd-smi"), Path("/usr/bin/amd-smi")])
+    return candidates
+
+
+def _rocm_smi_candidate_paths() -> list[Path]:
+    if os.name == "nt":
+        return []
+    return [
+        Path("/opt/rocm/bin/rocm-smi"),
+        Path("/opt/rocm/bin/rocm-smi.py"),
+        Path("/usr/bin/rocm-smi"),
+        Path("/usr/bin/rocm-smi.py"),
+    ]
 
 
 def _shorten_source(source: str) -> str:

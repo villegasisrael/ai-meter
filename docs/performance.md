@@ -13,6 +13,7 @@ La TUI debe seguir fluida sin bloquear render por IO, subprocess o parseo grande
 - Claude API: opt-in, `providers.claude.usage_api_interval_s`, default 900s.
 - `cpu_freq()`: cache 2s.
 - Top processes: cache 3s.
+- Temperatura: cache 10s; subprocess de GPU/WMI solo en heavy collect.
 
 ## Reglas
 
