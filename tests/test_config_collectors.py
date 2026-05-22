@@ -86,6 +86,54 @@ class ConfigCollectorTests(unittest.TestCase):
         self.assertEqual(temp, 61.5)
         self.assertEqual(source, "linux:k10temp:Tctl")
 
+    def test_system_collector_does_not_use_nvme_as_cpu_temperature(self) -> None:
+        if system_mod.psutil is None:
+            self.skipTest("psutil unavailable")
+        collector = SystemCollector(sensor_probe_enabled=False)
+        sensors = {"nvme": [SimpleNamespace(label="Composite", current=84.0)]}
+
+        with patch.object(system_mod.psutil, "sensors_temperatures", return_value=sensors, create=True):
+            with patch.object(system_mod, "_linux_hwmon_temperature_readings", return_value=[]):
+                temp, source = collector._read_linux_temp_fallback()
+
+        self.assertIsNone(temp)
+        self.assertEqual(source, "linux:no_data")
+
+    def test_system_collector_reads_nvidia_smi_gpu_temperature(self) -> None:
+        collector = SystemCollector(sensor_probe_enabled=False)
+        completed = SimpleNamespace(stdout="NVIDIA GeForce RTX 4090, 51\n")
+
+        with patch.object(system_mod, "_find_command", return_value=Path("nvidia-smi")):
+            with patch.object(system_mod.subprocess, "run", return_value=completed):
+                readings = collector._read_nvidia_smi_gpu_temps()
+
+        self.assertEqual(readings[0]["name"], "NVIDIA GeForce RTX 4090")
+        self.assertEqual(readings[0]["temp_c"], 51.0)
+        self.assertEqual(readings[0]["source"], "nvidia-smi")
+
+    def test_system_collector_parses_amd_smi_temperature_table(self) -> None:
+        text = "GPU  XCP    POWER    GPU_T    MEM_T\n  0    0    110 W    47 \u00b0C    39 \u00b0C"
+
+        readings = system_mod._parse_gpu_tool_output(text, source="amd-smi")
+
+        self.assertEqual(readings[0]["name"], "AMD GPU 0")
+        self.assertEqual(readings[0]["temp_c"], 47.0)
+        self.assertEqual(readings[0]["source"], "amd-smi")
+
+    def test_system_collector_reads_linux_amdgpu_temperature(self) -> None:
+        if system_mod.psutil is None:
+            self.skipTest("psutil unavailable")
+        collector = SystemCollector(sensor_probe_enabled=False)
+        sensors = {"amdgpu": [SimpleNamespace(label="edge", current=58.2)]}
+
+        with patch.object(system_mod.psutil, "sensors_temperatures", return_value=sensors, create=True):
+            with patch.object(system_mod, "_linux_hwmon_temperature_readings", return_value=[]):
+                readings = collector._read_linux_gpu_temp_fallback()
+
+        self.assertEqual(readings[0]["name"], "AMD GPU")
+        self.assertEqual(readings[0]["temp_c"], 58.2)
+        self.assertEqual(readings[0]["source"], "linux:amdgpu:edge")
+
     def test_winprobe_is_unavailable_outside_windows(self) -> None:
         sampler = system_mod.NativeWinProbeSampler()
         with patch.object(system_mod.os, "name", "posix"):

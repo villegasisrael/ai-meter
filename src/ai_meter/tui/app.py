@@ -404,6 +404,7 @@ class AiMeterTui(App[None]):
         temp_source = str(meta.get("cpu_temp_source", "unknown"))
         gpu_temp = meta.get("gpu_temp_c")
         gpu_name = str(meta.get("gpu_name") or "GPU")
+        gpu_source = str(meta.get("gpu_temp_source") or "unknown")
         needs_admin = bool(meta.get("needs_admin"))
         net_up = float(meta.get("net_sent_mb", 0.0))
         net_dn = float(meta.get("net_recv_mb", 0.0))
@@ -422,9 +423,10 @@ class AiMeterTui(App[None]):
         # GPU temperature bar
         gpu_label = gpu_name.split()[-1] if gpu_name else "GPU"
         if isinstance(gpu_temp, (int, float)):
-            gpu_temp_str = render_temp_bar(gpu_temp, max_temp=100.0, width=temp_bar_width) + f" [grey50]({gpu_label})[/]"
+            source_label = gpu_source if gpu_source != "unknown" else gpu_label
+            gpu_temp_str = render_temp_bar(gpu_temp, max_temp=100.0, width=temp_bar_width) + f" [grey50]({source_label})[/]"
         else:
-            gpu_temp_str = "[grey50]N/A[/]"
+            gpu_temp_str = f"[grey50]unknown ({gpu_source})[/]"
 
         # Network — pick unit automatically
         def _fmt_net(mb: float) -> str:

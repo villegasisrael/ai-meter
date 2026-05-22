@@ -82,6 +82,7 @@ def doctor() -> None:
     temp_probe = system_meta.get("cpu_temp_probe", {}) if isinstance(system_meta, dict) else {}
     gpu_temp_c = system_meta.get("gpu_temp_c") if isinstance(system_meta, dict) else None
     gpu_name = system_meta.get("gpu_name") if isinstance(system_meta, dict) else None
+    gpu_source = system_meta.get("gpu_temp_source") if isinstance(system_meta, dict) else "unknown"
     core_count = len(system_meta.get("core_loads") or []) if isinstance(system_meta, dict) else 0
     needs_admin = bool(system_meta.get("needs_admin")) if isinstance(system_meta, dict) else False
     from_service = bool(temp_probe.get("from_service")) if isinstance(temp_probe, dict) else False
@@ -98,7 +99,10 @@ def doctor() -> None:
     else:
         cpu_temp_str = f"unknown ({temp_source})"
     table.add_row("cpu temp", cpu_temp_str)
-    table.add_row("gpu temp", f"{gpu_temp_c} C ({gpu_name})" if gpu_temp_c is not None else "unknown")
+    table.add_row(
+        "gpu temp",
+        f"{gpu_temp_c} C ({gpu_name}; {gpu_source})" if gpu_temp_c is not None else f"unknown ({gpu_source})",
+    )
     table.add_row("cpu cores tracked", str(core_count))
 
     table.add_row("sqlite initialized", str(paths.db_file.exists()).lower())

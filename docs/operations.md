@@ -27,7 +27,15 @@ python -m ai_meter.main paths
 - estado de Claude usage API
 - homes de Codex/Claude
 - fuente de metricas sistema
-- temperatura como valor real o `unknown`
+- temperatura CPU/GPU como valor real o `unknown`
+
+Comandos utiles si GPU aparece `unknown`:
+
+```powershell
+nvidia-smi --query-gpu=name,temperature.gpu --format=csv,noheader,nounits
+amd-smi monitor --temperature
+rocm-smi --showtemp --json
+```
 
 ## Limpieza legacy
 

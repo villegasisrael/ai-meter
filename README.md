@@ -60,7 +60,7 @@ ai-meter run
 
 La version de Python debe ser 3.11 o superior. En Ubuntu 24.04+ `python3` normalmente cumple; en versiones anteriores puede requerir instalar Python 3.11+ por separado.
 
-En Linux la temperatura de CPU solo aparece si el sistema ya expone sensores via kernel/`psutil`. Si no hay fuente confiable, se muestra `unknown`.
+La temperatura solo aparece si el sistema ya expone sensores seguros: CPU via WMI/ACPI o kernel Linux, GPU via `nvidia-smi`, `amd-smi`/`rocm-smi` o `hwmon`. Si no hay fuente confiable, se muestra `unknown`.
 
 ## Uso
 
@@ -121,8 +121,8 @@ Remove-Item ".\src\ai_meter\bin\win-x64\ai-meter-sensor-probe.sys" -Force -Error
 | Claude limites 5h/semanal | OAuth usage API opcional | `unknown` |
 | CPU/RAM/disk/net | Windows: `ai-meter-winprobe.exe`; Linux: `psutil` | `psutil` |
 | CPU cores | `psutil.cpu_times(percpu=True)` por delta | `unknown` |
-| CPU temp | Windows: WMI confiable si existe; Linux: `psutil.sensors_temperatures()` | `unknown` |
-| GPU temp | No soportado por defecto | `unknown` |
+| CPU temp | Windows: WMI/ACPI si el sistema lo expone; Linux: `psutil.sensors_temperatures()` / `hwmon` (`k10temp`, `coretemp`) | `unknown` |
+| GPU temp | NVIDIA: `nvidia-smi`; AMD: `amd-smi`/`rocm-smi`; Linux: `hwmon` (`amdgpu`, `nouveau`) | `unknown` |
 
 La temperatura puede quedar en `unknown`. No se instala ningun driver kernel para leer sensores.
 

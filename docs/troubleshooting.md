@@ -21,6 +21,28 @@ Remove-Item ".\src\ai_meter\bin\win-x64\ai-meter-sensor-probe.sys" -Force -Error
 
 No desactivar Memory Integrity/HVCI para ai-meter. La temperatura debe caer a `unknown` si no hay fuente segura.
 
+## Temperatura CPU/GPU unknown
+
+En Windows, muchas CPUs AMD Ryzen no publican temperatura por una API de usuario estandar. Si WMI/ACPI no expone el dato, `ai-meter` debe mostrar `unknown`.
+
+Validar GPU:
+
+```powershell
+nvidia-smi --query-gpu=name,temperature.gpu --format=csv,noheader,nounits
+amd-smi monitor --temperature
+```
+
+En Linux:
+
+```bash
+python - <<'PY'
+import psutil
+print(psutil.sensors_temperatures(fahrenheit=False))
+PY
+find /sys/class/hwmon -maxdepth 2 -type f \( -name name -o -name 'temp*_input' -o -name 'temp*_label' \) -print
+rocm-smi --showtemp --json
+```
+
 ## Codex muestra plan viejo
 
 Prioridad:

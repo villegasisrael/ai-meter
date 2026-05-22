@@ -17,6 +17,7 @@
 - Claude API: deshabilitada por defecto; si se habilita usa `providers.claude.usage_api_interval_s`.
 - Winprobe: solo Windows, `app.winprobe_interval_ms`, por defecto 250ms.
 - Linux/Ubuntu: `SystemCollector` usa `psutil` para sistema rapido.
+- Temperaturas: solo en heavy collect; usa WMI/ACPI, `nvidia-smi`, `amd-smi`, `rocm-smi` o `hwmon` segun plataforma.
 
 No crear hilos por tick. Usar `PeriodicWorker`.
 
