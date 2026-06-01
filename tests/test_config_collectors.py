@@ -111,6 +111,47 @@ class ConfigCollectorTests(unittest.TestCase):
         self.assertEqual(readings[0]["temp_c"], 51.0)
         self.assertEqual(readings[0]["source"], "nvidia-smi")
 
+    def test_gpu_fallback_does_not_probe_amd_when_nvidia_is_available(self) -> None:
+        collector = SystemCollector(sensor_probe_enabled=False)
+        nvidia = [{"name": "NVIDIA GPU", "temp_c": 52.0, "source": "nvidia-smi"}]
+
+        with patch.object(collector, "_read_nvidia_smi_gpu_temps", return_value=nvidia):
+            with patch.object(collector, "_read_amd_smi_gpu_temps") as amd:
+                temp, name, source, readings = collector._read_platform_gpu_temp_fallback()
+
+        self.assertEqual(temp, 52.0)
+        self.assertEqual(name, "NVIDIA GPU")
+        self.assertEqual(source, "nvidia-smi")
+        self.assertEqual(readings, nvidia)
+        amd.assert_not_called()
+
+    def test_windows_wmi_temperature_does_not_prompt_without_admin(self) -> None:
+        collector = SystemCollector(sensor_probe_enabled=False)
+
+        with patch.object(system_mod.os, "name", "nt"):
+            with patch.object(system_mod, "_is_windows_admin", return_value=False):
+                with patch.object(system_mod.subprocess, "run") as run:
+                    temp, source = collector._read_wmi_temp_fallback()
+                    gpu_readings = collector._read_wmi_gpu_temp_fallback()
+
+        self.assertIsNone(temp)
+        self.assertEqual(source, "wmi:admin_required")
+        self.assertEqual(gpu_readings, [])
+        run.assert_not_called()
+
+    def test_windows_gpu_fallback_reports_admin_required_without_tools(self) -> None:
+        collector = SystemCollector(sensor_probe_enabled=False)
+
+        with patch.object(system_mod.os, "name", "nt"):
+            with patch.object(system_mod, "_is_windows_admin", return_value=False):
+                with patch.object(system_mod, "_find_command", return_value=None):
+                    temp, name, source, readings = collector._read_platform_gpu_temp_fallback()
+
+        self.assertIsNone(temp)
+        self.assertIsNone(name)
+        self.assertEqual(source, "wmi:admin_required")
+        self.assertEqual(readings, [])
+
     def test_system_collector_parses_amd_smi_temperature_table(self) -> None:
         text = "GPU  XCP    POWER    GPU_T    MEM_T\n  0    0    110 W    47 \u00b0C    39 \u00b0C"
 
@@ -119,6 +160,30 @@ class ConfigCollectorTests(unittest.TestCase):
         self.assertEqual(readings[0]["name"], "AMD GPU 0")
         self.assertEqual(readings[0]["temp_c"], 47.0)
         self.assertEqual(readings[0]["source"], "amd-smi")
+
+    def test_amd_smi_windows_candidates_do_not_scan_program_files(self) -> None:
+        with patch.object(system_mod.os, "name", "nt"):
+            with patch.dict(
+                system_mod.os.environ,
+                {
+                    "AI_METER_AMD_SMI": r"D:\tools\amd-smi.exe",
+                    "ProgramFiles": r"C:\Program Files",
+                    "ProgramW6432": r"C:\Program Files",
+                },
+            ):
+                candidates = system_mod._amd_smi_candidate_paths()
+
+        self.assertIn(Path(r"D:\tools\amd-smi.exe"), candidates)
+        self.assertIn(Path(r"C:\Program Files\AMD\ROCm\bin\amd-smi.exe"), candidates)
+        self.assertFalse(any("*" in str(path) for path in candidates))
+
+    def test_find_command_can_skip_path_lookup(self) -> None:
+        system_mod._COMMAND_CACHE.clear()
+        with patch.object(system_mod.shutil, "which", return_value=r"C:\Windows\system32\amd-smi.exe") as which:
+            found = system_mod._find_command("amd-smi", extra_paths=[], include_path=False)
+
+        self.assertIsNone(found)
+        which.assert_not_called()
 
     def test_system_collector_reads_linux_amdgpu_temperature(self) -> None:
         if system_mod.psutil is None:

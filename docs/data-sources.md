@@ -52,11 +52,11 @@ Cores:
 
 Temperatura:
 
-- Windows: WMI confiable si ya existe en el sistema.
-- Windows: WMI ACPI puede usarse como fallback debil.
+- Windows: WMI confiable si ya existe en el sistema y la sesion ya esta elevada.
+- Windows: WMI ACPI puede usarse como fallback debil solo en sesion elevada; sin permisos se informa `unknown`.
 - Linux/Ubuntu CPU: `psutil.sensors_temperatures()` o `/sys/class/hwmon` si el kernel expone sensores (`coretemp`, `k10temp`, `zenpower`, etc.).
 - GPU NVIDIA: `nvidia-smi --query-gpu=name,temperature.gpu --format=csv,noheader,nounits`.
-- GPU AMD: `amd-smi`/`rocm-smi` si estan instalados; en Linux tambien `/sys/class/hwmon` via `amdgpu`.
+- GPU AMD: `amd-smi`/`rocm-smi` si estan instalados; en Windows `amd-smi` debe estar en una ruta ROCm acotada o en `AI_METER_AMD_SMI`; en Linux tambien `/sys/class/hwmon` via `amdgpu`.
 - Si no hay fuente confiable, mostrar `unknown`.
 
 ## Driver legacy

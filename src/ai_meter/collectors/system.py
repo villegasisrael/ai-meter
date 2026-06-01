@@ -27,6 +27,8 @@ _SERVICE_FILE = (
 )
 _SERVICE_FILE_MAX_AGE_S = 30.0  # ignore if older than this
 _UNSAFE_SENSOR_PROBE_ENV = "AI_METER_ALLOW_VULNERABLE_SENSOR_PROBE"
+_COMMAND_CACHE: dict[tuple[str, bool, tuple[str, ...]], Path | None] = {}
+_COMMAND_CACHE_MISS = object()
 
 
 class SystemCollector(Collector):
@@ -444,7 +446,12 @@ class SystemCollector(Collector):
         self,
     ) -> tuple[float | None, str | None, str, list[dict[str, Any]]]:
         readings: list[dict[str, Any]] = []
-        readings.extend(self._read_nvidia_smi_gpu_temps())
+        nvidia_readings = self._read_nvidia_smi_gpu_temps()
+        if nvidia_readings:
+            readings = _dedupe_temp_readings(nvidia_readings)
+            best = _best_temp_reading(readings)
+            if best is not None:
+                return best["temp_c"], best.get("name"), str(best.get("source") or "gpu"), readings
         readings.extend(self._read_amd_smi_gpu_temps())
         if os.name != "nt":
             readings.extend(self._read_rocm_smi_gpu_temps())
@@ -463,7 +470,11 @@ class SystemCollector(Collector):
                 or _find_command("rocm-smi.py", extra_paths=_rocm_smi_candidate_paths())
             )
             if not has_gpu_tool:
-                source = "gpu:no_tool"
+                source = (
+                    "wmi:admin_required"
+                    if os.name == "nt" and not _is_windows_admin()
+                    else "gpu:no_tool"
+                )
             return None, None, source, []
         return best["temp_c"], best.get("name"), str(best.get("source") or "gpu"), readings
 
@@ -489,7 +500,11 @@ class SystemCollector(Collector):
         return _parse_csv_gpu_temperatures(out.stdout, source="nvidia-smi")
 
     def _read_amd_smi_gpu_temps(self) -> list[dict[str, Any]]:
-        exe = _find_command("amd-smi", extra_paths=_amd_smi_candidate_paths())
+        exe = _find_command(
+            "amd-smi",
+            extra_paths=_amd_smi_candidate_paths(),
+            include_path=os.name != "nt",
+        )
         if exe is None:
             return []
         commands = (
@@ -560,6 +575,8 @@ class SystemCollector(Collector):
         return readings
 
     def _read_wmi_gpu_temp_fallback(self) -> list[dict[str, Any]]:
+        if not _is_windows_admin():
+            return []
         script = r"""
 $ErrorActionPreference = 'SilentlyContinue'
 $items = @()
@@ -590,7 +607,7 @@ if ($items.Count -gt 0) { $items | ConvertTo-Json -Compress } else { '' }
 """
         try:
             out = subprocess.run(
-                ["powershell", "-NoProfile", "-Command", script],
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
                 capture_output=True,
                 text=True,
                 timeout=5.0,
@@ -670,6 +687,8 @@ if ($items.Count -gt 0) { $items | ConvertTo-Json -Compress } else { '' }
 
     def _read_wmi_temp_fallback(self) -> tuple[float | None, str]:
         """PowerShell WMI fallback; works when running as admin."""
+        if not _is_windows_admin():
+            return None, "wmi:admin_required"
         script = r"""
 $ErrorActionPreference = 'SilentlyContinue'
 $result = $null
@@ -706,11 +725,12 @@ if ($result) { $result | ConvertTo-Json -Compress } else { '' }
 """
         try:
             out = subprocess.run(
-                ["powershell", "-NoProfile", "-Command", script],
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
                 capture_output=True,
                 text=True,
                 timeout=5.0,
                 check=False,
+                startupinfo=_hidden_startupinfo(),
             )
             payload = (out.stdout or "").strip()
             if not payload:
@@ -1028,17 +1048,34 @@ def _dedupe_temp_readings(readings: list[dict[str, Any]]) -> list[dict[str, Any]
     return deduped
 
 
-def _find_command(name: str, extra_paths: list[Path] | None = None) -> Path | None:
-    found = shutil.which(name)
-    if found:
-        return Path(found)
-    if os.name == "nt" and not name.lower().endswith(".exe"):
-        found = shutil.which(f"{name}.exe")
+def _find_command(
+    name: str,
+    extra_paths: list[Path] | None = None,
+    include_path: bool = True,
+) -> Path | None:
+    extra = tuple(str(path) for path in (extra_paths or []))
+    key = (name.lower() if os.name == "nt" else name, bool(include_path), extra)
+    cached = _COMMAND_CACHE.get(key, _COMMAND_CACHE_MISS)
+    if cached is not _COMMAND_CACHE_MISS:
+        return cached
+
+    if include_path:
+        found = shutil.which(name)
         if found:
-            return Path(found)
+            result = Path(found)
+            _COMMAND_CACHE[key] = result
+            return result
+        if os.name == "nt" and not name.lower().endswith(".exe"):
+            found = shutil.which(f"{name}.exe")
+            if found:
+                result = Path(found)
+                _COMMAND_CACHE[key] = result
+                return result
     for candidate in extra_paths or []:
         if candidate.exists():
+            _COMMAND_CACHE[key] = candidate
             return candidate
+    _COMMAND_CACHE[key] = None
     return None
 
 
@@ -1063,15 +1100,14 @@ def _nvidia_smi_candidate_paths() -> list[Path]:
 
 def _amd_smi_candidate_paths() -> list[Path]:
     candidates: list[Path] = []
+    env = os.environ.get("AI_METER_AMD_SMI")
+    if env:
+        candidates.append(Path(env))
     if os.name == "nt":
         roots = [os.environ.get("ProgramFiles"), os.environ.get("ProgramW6432")]
         for root_text in [r for r in roots if r]:
             root = Path(root_text) / "AMD" / "ROCm"
-            try:
-                candidates.extend(root.glob("*/*/amd-smi.exe"))
-                candidates.extend(root.glob("*/bin/amd-smi.exe"))
-            except OSError:
-                pass
+            candidates.append(root / "bin" / "amd-smi.exe")
     else:
         candidates.extend([Path("/opt/rocm/bin/amd-smi"), Path("/usr/bin/amd-smi")])
     return candidates
@@ -1106,6 +1142,17 @@ def _shorten_source(source: str) -> str:
 def _unsafe_sensor_probe_allowed() -> bool:
     value = os.environ.get(_UNSAFE_SENSOR_PROBE_ENV, "").strip().lower()
     return value in {"1", "true", "yes", "on"}
+
+
+def _is_windows_admin() -> bool:
+    if os.name != "nt":
+        return False
+    try:
+        import ctypes
+
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
 
 
 def _find_bundled_tool(name: str) -> Path | None:
