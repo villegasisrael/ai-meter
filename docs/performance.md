@@ -14,6 +14,8 @@ La TUI debe seguir fluida sin bloquear render por IO, subprocess o parseo grande
 - `cpu_freq()`: cache 2s.
 - Top processes: cache 3s.
 - Temperatura: cache 10s; subprocess de GPU/WMI solo en heavy collect.
+- Windows WMI/ACPI no se intenta en sesiones no elevadas para evitar prompts repetidos de permisos.
+- Deteccion de herramientas GPU cacheada; no hacer glob recursivo en `%ProgramFiles%`.
 
 ## Reglas
 

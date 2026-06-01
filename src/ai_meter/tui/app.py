@@ -272,6 +272,12 @@ class AiMeterTui(App[None]):
                         "weekly [yellow]unknown[/] [grey40](usage-api off)[/]"
                     )
                     api_tag_line = "[grey40]local observed usage only[/]"
+                elif self.engine.claude_api.token_expired:
+                    api_limit_lines = (
+                        "5h     [yellow]unknown[/] [grey40](token expired)[/]\n"
+                        "weekly [yellow]unknown[/] [grey40](token expired)[/]"
+                    )
+                    api_tag_line = "[yellow]OAuth token expired — relogin in Claude Code[/]"
                 elif err:
                     api_limit_lines = (
                         "5h     [red]unknown[/] [grey40](auth/fetch error)[/]\n"
