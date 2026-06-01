@@ -31,11 +31,18 @@ Uso observado:
 
 Limites reales:
 
-- Opcional via `https://api.anthropic.com/api/oauth/usage`.
-- Requiere `providers.claude.usage_api_enabled=true` y `TOKEN` en `.env`.
+- Via `https://api.anthropic.com/api/oauth/usage` (mismo endpoint que usa `/usage` de Claude Code).
+- NO es la API de facturacion: no consume tokens de modelo ni genera cargos. Usa el token OAuth
+  de la sesion (`sk-ant-oat01-...`), no una API key `sk-ant-api...`.
+- Habilitado por defecto con `providers.claude.usage_api_enabled=true`.
+- Token: se auto-carga desde `~/.claude/.credentials.json` (`claudeAiOauth.accessToken`).
+  Un `TOKEN` explicito en `.env` (con prefijo `Bearer `) tiene prioridad como override manual.
+- Se respeta `claudeAiOauth.expiresAt`: si el token de disco esta vencido se omite la llamada y se
+  muestra `unknown` hasta que Claude Code lo refresque en disco (no se intenta refrescar el token,
+  eso requeriria el flujo OAuth con secretos).
 - Soporta ventanas `five_hour`, `seven_day`, `seven_day_opus`, `seven_day_sonnet`, `seven_day_cowork`,
   `seven_day_design`, `seven_day_routines` y `extra_usage` cuando la API las entrega.
-- Si no esta habilitado o falla, mostrar `unknown`.
+- Si no esta habilitado, el token falta/vence, o la llamada falla, mostrar `unknown`.
 
 ## Sistema
 

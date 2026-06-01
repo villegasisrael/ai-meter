@@ -16,18 +16,41 @@ from typing import Any
 _USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 _DEFAULT_CACHE_SECONDS = 900
 _TIMEOUT_S = 10
+_CREDENTIALS_NAME = ".credentials.json"
 
 
 class ClaudeApiUsageCollector:
-    def __init__(self, token: str, cache_seconds: int = _DEFAULT_CACHE_SECONDS) -> None:
+    def __init__(
+        self,
+        token: str,
+        cache_seconds: int = _DEFAULT_CACHE_SECONDS,
+        expires_at_ms: int | None = None,
+        token_source: str = "env",
+    ) -> None:
         # token = full Authorization header value, e.g. "Bearer sk-ant-oat01--..."
         self._token = token
         self._cache_seconds = max(60, int(cache_seconds))
+        self._expires_at_ms = expires_at_ms
+        self._token_source = token_source
         self._last_fetch_mono = 0.0
         self._next_retry_mono = 0.0
         self._cached: dict[str, Any] | None = None
         self._parsed: ParsedUsage | None = None
         self._last_error: str | None = None
+
+    @classmethod
+    def from_sources(
+        cls,
+        claude_home: Path | None = None,
+        env_path: Path | None = None,
+        cache_seconds: int = _DEFAULT_CACHE_SECONDS,
+    ) -> ClaudeApiUsageCollector | None:
+        # An explicit TOKEN in .env wins (manual override); otherwise reuse the
+        # OAuth token Claude Code already stored at ~/.claude/.credentials.json.
+        collector = cls.from_env_file(env_path=env_path, cache_seconds=cache_seconds)
+        if collector is not None:
+            return collector
+        return cls.from_credentials(claude_home, cache_seconds=cache_seconds)
 
     @classmethod
     def from_env_file(
@@ -44,8 +67,29 @@ class ClaudeApiUsageCollector:
             if path and path.exists():
                 token = _parse_token_from_env(path)
                 if token:
-                    return cls(token, cache_seconds=cache_seconds)
+                    return cls(token, cache_seconds=cache_seconds, token_source="env")
         return None
+
+    @classmethod
+    def from_credentials(
+        cls,
+        claude_home: Path | None,
+        cache_seconds: int = _DEFAULT_CACHE_SECONDS,
+    ) -> ClaudeApiUsageCollector | None:
+        if claude_home is None:
+            return None
+        path = Path(claude_home) / _CREDENTIALS_NAME
+        if not path.exists():
+            return None
+        token, expires_at_ms = _parse_token_from_credentials(path)
+        if not token:
+            return None
+        return cls(
+            token,
+            cache_seconds=cache_seconds,
+            expires_at_ms=expires_at_ms,
+            token_source="credentials",
+        )
 
     @property
     def has_data(self) -> bool:
@@ -70,6 +114,21 @@ class ClaudeApiUsageCollector:
         remaining = int(self._next_retry_mono - time.monotonic())
         return max(0, remaining)
 
+    @property
+    def token_source(self) -> str:
+        return self._token_source
+
+    @property
+    def token_expired(self) -> bool:
+        return self._is_token_expired()
+
+    def _is_token_expired(self) -> bool:
+        if self._expires_at_ms is None:
+            return False
+        now_ms = datetime.now(timezone.utc).timestamp() * 1000.0
+        # Small safety margin so we stop using a token about to expire.
+        return now_ms >= (self._expires_at_ms - 30_000)
+
     def fetch_if_due(self) -> ParsedUsage | None:
         if not self.is_due():
             return self._parsed
@@ -79,6 +138,10 @@ class ClaudeApiUsageCollector:
         return self._parsed
 
     def _do_fetch(self) -> ParsedUsage | None:
+        if self._is_token_expired():
+            self._last_error = "OAuth token expired (re-login in Claude Code)"
+            self._next_retry_mono = time.monotonic() + self._cache_seconds
+            return self._parsed
         req = urllib.request.Request(
             _USAGE_URL,
             headers={
@@ -248,6 +311,29 @@ def _parse_token_from_env(path: Path) -> str | None:
         return None
     except Exception:
         return None
+
+
+def _parse_token_from_credentials(path: Path) -> tuple[str | None, int | None]:
+    try:
+        obj = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
+    except Exception:
+        return None, None
+    if not isinstance(obj, dict):
+        return None, None
+    oauth = obj.get("claudeAiOauth")
+    if not isinstance(oauth, dict):
+        return None, None
+    token = oauth.get("accessToken")
+    if not isinstance(token, str) or not token.strip():
+        return None, None
+    token = token.strip()
+    if not token.lower().startswith("bearer "):
+        token = f"Bearer {token}"
+    try:
+        expires_at_ms = int(oauth.get("expiresAt"))
+    except (TypeError, ValueError):
+        expires_at_ms = None
+    return token, expires_at_ms
 
 
 def _parse_retry_after_seconds(value: Any) -> int:

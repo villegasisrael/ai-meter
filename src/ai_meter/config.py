@@ -37,7 +37,7 @@ class ProviderSection(BaseModel):
 
 
 class ClaudeProviderSection(ProviderSection):
-    usage_api_enabled: bool = False
+    usage_api_enabled: bool = True
     usage_api_interval_s: int = 900
 
 

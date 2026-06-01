@@ -58,8 +58,9 @@ class MonitorEngine:
             sensor_probe_enabled=self.config.app.sensor_probe_enabled,
         )
         self.claude_api = (
-            ClaudeApiUsageCollector.from_env_file(
-                cache_seconds=self.config.providers.claude.usage_api_interval_s
+            ClaudeApiUsageCollector.from_sources(
+                claude_home=self.paths.claude_home,
+                cache_seconds=self.config.providers.claude.usage_api_interval_s,
             )
             if self.config.providers.claude.enabled
             and self.config.providers.claude.usage_api_enabled

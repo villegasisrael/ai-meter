@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from ai_meter.collectors import system as system_mod
-from ai_meter.collectors.claude_api_usage import ParsedUsage
+from ai_meter.collectors.claude_api_usage import ClaudeApiUsageCollector, ParsedUsage
 from ai_meter.collectors.claude import ClaudeCollector
 from ai_meter.collectors.codex import CodexCollector
 from ai_meter.collectors.system import SystemCollector
@@ -28,12 +28,53 @@ def _paths(root: Path) -> AppPaths:
 
 
 class ConfigCollectorTests(unittest.TestCase):
-    def test_claude_usage_api_is_opt_in(self) -> None:
+    def test_claude_usage_api_enabled_by_default(self) -> None:
+        # The OAuth usage endpoint consumes no model tokens and reuses the local
+        # Claude Code login, so it is on by default to surface real 5h/7d limits.
         config = AppConfig()
         self.assertTrue(config.providers.claude.enabled)
-        self.assertFalse(config.providers.claude.usage_api_enabled)
+        self.assertTrue(config.providers.claude.usage_api_enabled)
         self.assertGreaterEqual(config.providers.claude.usage_api_interval_s, 60)
         self.assertFalse(config.app.sensor_probe_enabled)
+
+    def test_usage_collector_loads_oauth_token_from_credentials(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            (home / ".credentials.json").write_text(
+                json.dumps(
+                    {
+                        "claudeAiOauth": {
+                            "accessToken": "sk-ant-oat01--abc",
+                            "expiresAt": 9_999_999_999_000,
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            collector = ClaudeApiUsageCollector.from_credentials(home)
+            self.assertIsNotNone(collector)
+            assert collector is not None
+            self.assertEqual(collector.token_source, "credentials")
+            self.assertTrue(collector._token.startswith("Bearer sk-ant-oat01--"))
+            self.assertFalse(collector._is_token_expired())
+
+    def test_usage_collector_detects_expired_token(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            (home / ".credentials.json").write_text(
+                json.dumps(
+                    {
+                        "claudeAiOauth": {
+                            "accessToken": "Bearer sk-ant-oat01--old",
+                            "expiresAt": 1_000,
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            collector = ClaudeApiUsageCollector.from_credentials(home)
+            assert collector is not None
+            self.assertTrue(collector._is_token_expired())
 
     def test_config_round_trip_keeps_provider_flags(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
