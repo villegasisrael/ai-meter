@@ -257,9 +257,20 @@ class AiMeterTui(App[None]):
             )
 
             api = snap.claude_api_usage
+            collector = self.engine.claude_api
+            is_stale = bool(collector is not None and collector.is_stale)
             if api is not None:
                 api_limit_lines = self._render_api_limits(api, limit_w)
-                api_tag_line = f"[grey40]api fetched {api.fetched_at}[/]"
+                if is_stale:
+                    age_txt = self._format_age(getattr(api, "age_seconds", None))
+                    if collector is not None and collector.token_expired:
+                        api_tag_line = (
+                            f"[yellow]last known {age_txt} ago — token expired, relogin in Claude Code[/]"
+                        )
+                    else:
+                        api_tag_line = f"[yellow]stale: last known {age_txt} ago[/]"
+                else:
+                    api_tag_line = f"[grey40]api fetched {api.fetched_at}[/]"
             else:
                 err = (
                     self.engine.claude_api.last_error
@@ -577,6 +588,22 @@ class AiMeterTui(App[None]):
             return "[yellow]unknown[/]"
         reset_text = self._format_reset_seconds(reset_seconds)
         return f"{render_bar(float(used), width)} [grey60]reset {reset_text}[/]"
+
+    def _format_age(self, value: Any) -> str:
+        try:
+            total = int(value)
+        except (TypeError, ValueError):
+            return "?"
+        days, rem = divmod(total, 86400)
+        hours, rem = divmod(rem, 3600)
+        minutes = rem // 60
+        if days > 0:
+            return f"{days}d {hours}h"
+        if hours > 0:
+            return f"{hours}h {minutes}m"
+        if minutes > 0:
+            return f"{minutes}m"
+        return f"{total}s"
 
     def _format_reset_seconds(self, value: Any) -> str:
         try:

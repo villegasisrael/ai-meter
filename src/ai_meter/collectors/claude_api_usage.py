@@ -26,17 +26,24 @@ class ClaudeApiUsageCollector:
         cache_seconds: int = _DEFAULT_CACHE_SECONDS,
         expires_at_ms: int | None = None,
         token_source: str = "env",
+        cache_path: Path | None = None,
     ) -> None:
         # token = full Authorization header value, e.g. "Bearer sk-ant-oat01--..."
         self._token = token
         self._cache_seconds = max(60, int(cache_seconds))
         self._expires_at_ms = expires_at_ms
         self._token_source = token_source
+        self._cache_path = Path(cache_path) if cache_path else None
         self._last_fetch_mono = 0.0
         self._next_retry_mono = 0.0
         self._cached: dict[str, Any] | None = None
         self._parsed: ParsedUsage | None = None
+        self._parsed_is_fresh = False
         self._last_error: str | None = None
+        # Seed with the last successful result persisted on a previous run so
+        # we can show a stale value (with age) instead of "unknown" when the
+        # token has expired or the API is unreachable.
+        self._load_cache()
 
     @classmethod
     def from_sources(
@@ -44,19 +51,25 @@ class ClaudeApiUsageCollector:
         claude_home: Path | None = None,
         env_path: Path | None = None,
         cache_seconds: int = _DEFAULT_CACHE_SECONDS,
+        cache_path: Path | None = None,
     ) -> ClaudeApiUsageCollector | None:
         # An explicit TOKEN in .env wins (manual override); otherwise reuse the
         # OAuth token Claude Code already stored at ~/.claude/.credentials.json.
-        collector = cls.from_env_file(env_path=env_path, cache_seconds=cache_seconds)
+        collector = cls.from_env_file(
+            env_path=env_path, cache_seconds=cache_seconds, cache_path=cache_path
+        )
         if collector is not None:
             return collector
-        return cls.from_credentials(claude_home, cache_seconds=cache_seconds)
+        return cls.from_credentials(
+            claude_home, cache_seconds=cache_seconds, cache_path=cache_path
+        )
 
     @classmethod
     def from_env_file(
         cls,
         env_path: Path | None = None,
         cache_seconds: int = _DEFAULT_CACHE_SECONDS,
+        cache_path: Path | None = None,
     ) -> ClaudeApiUsageCollector | None:
         candidates: list[Path | None] = [env_path] if env_path else []
         candidates += [
@@ -67,7 +80,12 @@ class ClaudeApiUsageCollector:
             if path and path.exists():
                 token = _parse_token_from_env(path)
                 if token:
-                    return cls(token, cache_seconds=cache_seconds, token_source="env")
+                    return cls(
+                        token,
+                        cache_seconds=cache_seconds,
+                        token_source="env",
+                        cache_path=cache_path,
+                    )
         return None
 
     @classmethod
@@ -75,6 +93,7 @@ class ClaudeApiUsageCollector:
         cls,
         claude_home: Path | None,
         cache_seconds: int = _DEFAULT_CACHE_SECONDS,
+        cache_path: Path | None = None,
     ) -> ClaudeApiUsageCollector | None:
         if claude_home is None:
             return None
@@ -89,7 +108,46 @@ class ClaudeApiUsageCollector:
             cache_seconds=cache_seconds,
             expires_at_ms=expires_at_ms,
             token_source="credentials",
+            cache_path=cache_path,
         )
+
+    def _load_cache(self) -> None:
+        if self._cache_path is None or not self._cache_path.exists():
+            return
+        try:
+            obj = json.loads(self._cache_path.read_text(encoding="utf-8"))
+        except Exception:
+            return
+        if not isinstance(obj, dict):
+            return
+        data = obj.get("data")
+        fetched_epoch = _safe_float(obj.get("fetched_epoch"))
+        if not isinstance(data, dict):
+            return
+        try:
+            self._cached = data
+            self._parsed = ParsedUsage.from_api(data, fetched_epoch=fetched_epoch)
+            self._parsed_is_fresh = False
+        except Exception:
+            self._parsed = None
+
+    def _save_cache(self, data: dict[str, Any]) -> None:
+        if self._cache_path is None:
+            return
+        try:
+            self._cache_path.parent.mkdir(parents=True, exist_ok=True)
+            payload = json.dumps(
+                {"fetched_epoch": datetime.now(timezone.utc).timestamp(), "data": data},
+                ensure_ascii=False,
+            )
+            self._cache_path.write_text(payload, encoding="utf-8")
+        except Exception:
+            pass
+
+    @property
+    def is_stale(self) -> bool:
+        """True when the current parsed value comes from cache, not a live fetch."""
+        return self._parsed is not None and not self._parsed_is_fresh
 
     @property
     def has_data(self) -> bool:
@@ -156,9 +214,11 @@ class ClaudeApiUsageCollector:
                 data = json.loads(resp.read().decode())
             self._cached = data
             self._parsed = ParsedUsage.from_api(data)
+            self._parsed_is_fresh = True
             self._last_fetch_mono = time.monotonic()
             self._next_retry_mono = 0.0
             self._last_error = None
+            self._save_cache(data)
             return self._parsed
         except urllib.error.HTTPError as exc:
             if exc.code == 429:
@@ -181,6 +241,7 @@ class ParsedUsage:
         "seven_day_reset_secs",
         "limits",
         "fetched_at",
+        "fetched_epoch",
     )
 
     def __init__(
@@ -191,6 +252,7 @@ class ParsedUsage:
         seven_day_reset_secs: int | None,
         limits: list[dict[str, Any]],
         fetched_at: str,
+        fetched_epoch: float | None = None,
     ) -> None:
         self.five_hour_pct = five_hour_pct
         self.five_hour_reset_secs = five_hour_reset_secs
@@ -198,20 +260,30 @@ class ParsedUsage:
         self.seven_day_reset_secs = seven_day_reset_secs
         self.limits = limits
         self.fetched_at = fetched_at
+        self.fetched_epoch = fetched_epoch
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> ParsedUsage:
+    def from_api(cls, data: dict[str, Any], fetched_epoch: float | None = None) -> ParsedUsage:
         fh = data.get("five_hour") or {}
         sd = data.get("seven_day") or {}
         limits = _parse_limits(data)
+        now = datetime.now(timezone.utc)
         return cls(
             five_hour_pct=_safe_float(fh.get("utilization")),
             five_hour_reset_secs=_reset_secs(fh.get("resets_at")),
             seven_day_pct=_safe_float(sd.get("utilization")),
             seven_day_reset_secs=_reset_secs(sd.get("resets_at")),
             limits=limits,
-            fetched_at=datetime.now(timezone.utc).strftime("%H:%M:%S"),
+            fetched_at=now.strftime("%H:%M:%S"),
+            fetched_epoch=fetched_epoch if fetched_epoch is not None else now.timestamp(),
         )
+
+    @property
+    def age_seconds(self) -> int | None:
+        if self.fetched_epoch is None:
+            return None
+        age = datetime.now(timezone.utc).timestamp() - self.fetched_epoch
+        return max(0, int(age))
 
 
 def _safe_float(v: Any) -> float | None:

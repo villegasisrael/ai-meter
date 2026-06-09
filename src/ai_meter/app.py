@@ -61,13 +61,19 @@ class MonitorEngine:
             ClaudeApiUsageCollector.from_sources(
                 claude_home=self.paths.claude_home,
                 cache_seconds=self.config.providers.claude.usage_api_interval_s,
+                cache_path=getattr(self.paths, "data_dir", None) and self.paths.data_dir / "claude_usage_cache.json",
             )
             if self.config.providers.claude.enabled
             and self.config.providers.claude.usage_api_enabled
             else None
         )
         self._lock = RLock()
-        self._claude_api_usage: ParsedUsage | None = None
+        self._claude_api_usage: ParsedUsage | None = (
+            self.claude_api.current() if self.claude_api is not None else None
+        )
+        # Tracks which "<scope>:<limit>" thresholds have already fired an alert
+        # so we emit one event per crossing instead of every refresh.
+        self._alerted_limits: set[str] = set()
 
         self._provider_rows: dict[str, dict[str, Any]] = {}
         self._provider_meta: dict[str, dict[str, Any]] = {}
@@ -95,8 +101,70 @@ class MonitorEngine:
             if result is not None:
                 with self._lock:
                     self._claude_api_usage = result
+                if not self.claude_api.is_stale:
+                    self._check_claude_api_alerts(result)
         except Exception:
             pass
+
+    def _check_claude_api_alerts(self, usage: ParsedUsage) -> None:
+        threshold = float(self.config.app.alert_threshold_pct)
+        if not self.config.app.alert_enabled or threshold <= 0:
+            return
+        checks: list[tuple[str, float | None, int | None]] = [
+            ("5h", usage.five_hour_pct, usage.five_hour_reset_secs),
+            ("weekly", usage.seven_day_pct, usage.seven_day_reset_secs),
+        ]
+        for raw in usage.limits or []:
+            if isinstance(raw, dict) and raw.get("pct") is not None:
+                checks.append((str(raw.get("name") or "limit"), raw.get("pct"), raw.get("reset_secs")))
+        for name, pct, reset_secs in checks:
+            self._evaluate_threshold("claude", name, pct, threshold, reset_secs)
+
+    def _evaluate_threshold(
+        self,
+        provider: str,
+        scope: str,
+        pct: Any,
+        threshold: float,
+        reset_secs: int | None = None,
+    ) -> None:
+        try:
+            value = float(pct)
+        except (TypeError, ValueError):
+            return
+        key = f"{provider}:{scope}"
+        if value >= threshold:
+            if key in self._alerted_limits:
+                return
+            self._alerted_limits.add(key)
+            reset_txt = f" (resets in ~{reset_secs // 60}m)" if reset_secs else ""
+            self._emit_alert(
+                provider,
+                title=f"{scope} usage at {value:.0f}%",
+                message=f"{provider} {scope} limit reached {value:.0f}% (>= {threshold:.0f}%){reset_txt}",
+            )
+        elif value < threshold:
+            # Re-arm once usage drops back below the threshold.
+            self._alerted_limits.discard(key)
+
+    def _emit_alert(self, provider: str, title: str, message: str) -> None:
+        from ai_meter.models import EventRecord
+
+        event = EventRecord(
+            provider=provider,
+            timestamp=datetime.now(timezone.utc),
+            event_type="usage_alert",
+            severity="warning",
+            title=title,
+            message=message,
+            accuracy="real",
+            source="local",
+            metadata={"provider": provider, "kind": "threshold"},
+        )
+        with self._lock:
+            self._recent_events.appendleft(event.model_dump(mode="json"))
+            if self.db is not None:
+                self.db.add_event(event)
 
     def run_light_collection(self) -> None:
         try:
@@ -137,6 +205,8 @@ class MonitorEngine:
                             self._cpu_history.append(float(cpu))
                         except (TypeError, ValueError):
                             pass
+                elif name == "codex":
+                    self._check_codex_alerts(batch.provider_status.metadata)
 
             for event in batch.events:
                 event_dict = event.model_dump(mode="json")
@@ -153,6 +223,24 @@ class MonitorEngine:
                     provider_status=batch.provider_status,
                     events=batch.events,
                     usage_samples=batch.usage_samples,
+                )
+
+    def _check_codex_alerts(self, metadata: dict[str, Any]) -> None:
+        threshold = float(self.config.app.alert_threshold_pct)
+        if not self.config.app.alert_enabled or threshold <= 0:
+            return
+        rate_limits = metadata.get("rate_limits") if isinstance(metadata, dict) else None
+        if not isinstance(rate_limits, dict):
+            return
+        for key, scope in (("primary", "5h"), ("secondary", "weekly")):
+            window = rate_limits.get(key)
+            if isinstance(window, dict):
+                self._evaluate_threshold(
+                    "codex",
+                    scope,
+                    window.get("used_percent"),
+                    threshold,
+                    window.get("reset_after_seconds"),
                 )
 
     def _persist_error(self, provider: str, error: str) -> None:

@@ -22,6 +22,9 @@ class AppSection(BaseModel):
     theme: str = "btop_dark"
     start_paused: bool = False
     persist_history: bool = False
+    # Emit a one-time alert event when a usage limit crosses this percentage.
+    alert_threshold_pct: float = 80.0
+    alert_enabled: bool = True
 
 
 class PrivacySection(BaseModel):
