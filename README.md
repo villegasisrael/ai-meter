@@ -67,10 +67,16 @@ La temperatura solo aparece si el sistema ya expone sensores seguros: CPU via WM
 Comandos principales:
 
 ```powershell
-ai-meter run
-ai-meter doctor
-ai-meter paths
+ai-meter run        # TUI de monitoreo
+ai-meter doctor     # diagnostico local y modo sin red
+ai-meter paths      # rutas locales resueltas
+ai-meter init       # crea config y base de datos si faltan
+ai-meter export --format json   # exporta datos del sqlite local (json o csv)
 ```
+
+En Windows tambien existen comandos de mantenimiento del driver legacy:
+`ai-meter install-service` (deshabilitado) y `ai-meter uninstall-service`
+(requiere Administrador).
 
 Tambien puede ejecutarse sin instalar el entrypoint, desde la raiz del repo:
 
@@ -148,7 +154,7 @@ enabled = true
 
 [providers.claude]
 enabled = true
-usage_api_enabled = false
+usage_api_enabled = true
 usage_api_interval_s = 900
 
 [app]

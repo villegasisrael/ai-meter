@@ -214,7 +214,7 @@ def uninstall_service() -> None:
         console.print("Right-click PowerShell → 'Run as Administrator', then run again.")
         raise typer.Exit(code=1)
 
-    ps_script = """
+    ps_script = r"""
 Stop-ScheduledTask  -TaskName 'ai-meter-sensor' -ErrorAction SilentlyContinue
 Unregister-ScheduledTask -TaskName 'ai-meter-sensor' -Confirm:$false -ErrorAction SilentlyContinue
 sc.exe stop WinRing0_1_2_0 | Out-Null
