@@ -44,4 +44,21 @@ Tablas:
 - `events`
 - `file_offsets`
 
-`retention_days` existe en config, pero la limpieza automatica aun no esta implementada.
+`retention_days` controla la retencion. `Database.purge_old(retention_days)` se
+ejecuta al arrancar `ai-meter run` (cuando `persist_history=true`) y borra
+`events`/`usage_samples` anteriores al corte, mas sesiones y proyectos huerfanos.
+Tambien puede ejecutarse manualmente con `ai-meter prune [--days N]`.
+Un valor `<= 0` desactiva la limpieza.
+
+## Alertas de uso
+
+`app.alert_threshold_pct` (por defecto 80) y `app.alert_enabled` controlan las
+alertas: cuando un limite de Claude (API OAuth) o Codex cruza el umbral, el engine
+emite un evento `usage_alert` (severidad `warning`) una sola vez por cruce y se
+re-arma cuando el uso baja del umbral.
+
+## Datos persistentes fuera de SQLite
+
+El ultimo resultado correcto de la API de uso de Claude se cachea en
+`<data_dir>/claude_usage_cache.json`. Al reiniciar (o si el token OAuth expira) la
+TUI muestra ese ultimo valor conocido con su antiguedad en vez de `unknown`.
