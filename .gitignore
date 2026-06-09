@@ -11,3 +11,4 @@ dist/
 native/**/bin/
 native/**/obj/
 ai-meter-export.*
+.claude/
