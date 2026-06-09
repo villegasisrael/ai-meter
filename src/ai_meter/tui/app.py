@@ -233,6 +233,8 @@ class AiMeterTui(App[None]):
                 self._render_cpu_details(
                     snap.system_meta,
                     self._panel_content_width(cpu_details_widget),
+                    cpu_avg=snap.cpu_avg,
+                    cpu_peak=snap.cpu_peak,
                 )
             )
 
@@ -385,7 +387,13 @@ class AiMeterTui(App[None]):
             return True
         return False
 
-    def _render_cpu_details(self, meta: dict[str, Any], width: int = 44) -> str:
+    def _render_cpu_details(
+        self,
+        meta: dict[str, Any],
+        width: int = 44,
+        cpu_avg: float | None = None,
+        cpu_peak: float | None = None,
+    ) -> str:
         if not meta:
             return "[bold cyan]CPU[/]\n[grey50]no data yet[/]"
 
@@ -399,12 +407,20 @@ class AiMeterTui(App[None]):
         freq_str = (
             f"[grey60]{cpu_freq_mhz / 1000:.1f} GHz[/]  " if cpu_freq_mhz else ""
         )
+        session_str = ""
+        if cpu_avg is not None:
+            avg_color = cpu_gradient_color(cpu_avg)
+            session_str = f"  [grey50]avg[/] [{avg_color}]{cpu_avg:.1f}%[/]"
+            if cpu_peak is not None:
+                peak_color = cpu_gradient_color(cpu_peak)
+                session_str += f" [grey50]peak[/] [{peak_color}]{cpu_peak:.1f}%[/]"
         bar_width = max(16, min(160, width - 12))
         core_cols = 5 if width >= 120 else 4 if width >= 92 else 3 if width >= 68 else 2
         mini_width = max(5, min(14, (width // core_cols) - 11))
 
         lines = [
-            f"[bold white]{cpu_name}[/]  {freq_str}[{cpu_color}]{cpu:.1f}%[/]  [grey40]{metrics_source}[/]",
+            f"[bold white]{cpu_name}[/]  {freq_str}[{cpu_color}]{cpu:.1f}%[/]"
+            f"{session_str}  [grey40]{metrics_source}[/]",
             f"CPU  {render_bar(cpu, bar_width)}",
         ]
         if core_loads:

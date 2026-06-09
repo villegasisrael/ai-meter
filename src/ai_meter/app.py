@@ -28,6 +28,8 @@ class DashboardSnapshot:
     system_meta: dict[str, Any]
     claude_api_usage: ParsedUsage | None = None
     cpu_history: list[float] = field(default_factory=list)
+    cpu_avg: float | None = None
+    cpu_peak: float | None = None
 
 
 class MonitorEngine:
@@ -83,6 +85,10 @@ class MonitorEngine:
             "codex": deque(maxlen=self.config.ui.sparkline_points),
         }
         self._cpu_history: deque[float] = deque(maxlen=600)
+        # Running stats over the whole session (not bounded by the deque).
+        self._cpu_sum: float = 0.0
+        self._cpu_count: int = 0
+        self._cpu_peak: float = 0.0
 
     def provider_enabled(self, provider: str) -> bool:
         section = getattr(self.config.providers, provider, None)
@@ -202,9 +208,15 @@ class MonitorEngine:
                     cpu = batch.provider_status.metadata.get("cpu_percent")
                     if cpu is not None:
                         try:
-                            self._cpu_history.append(float(cpu))
+                            cpu_val = float(cpu)
                         except (TypeError, ValueError):
-                            pass
+                            cpu_val = None
+                        if cpu_val is not None:
+                            self._cpu_history.append(cpu_val)
+                            self._cpu_sum += cpu_val
+                            self._cpu_count += 1
+                            if cpu_val > self._cpu_peak:
+                                self._cpu_peak = cpu_val
                 elif name == "codex":
                     self._check_codex_alerts(batch.provider_status.metadata)
 
@@ -275,4 +287,6 @@ class MonitorEngine:
                 system_meta=dict(system_meta),
                 claude_api_usage=self._claude_api_usage,
                 cpu_history=list(self._cpu_history),
+                cpu_avg=(self._cpu_sum / self._cpu_count) if self._cpu_count else None,
+                cpu_peak=self._cpu_peak if self._cpu_count else None,
             )
