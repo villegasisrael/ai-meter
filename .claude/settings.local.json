@@ -4,7 +4,14 @@
       "WebFetch(domain:raw.githubusercontent.com)",
       "WebFetch(domain:api.github.com)",
       "WebFetch(domain:github.com)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(git checkout *)",
+      "Bash(.venv/Scripts/python.exe -c \"import ai_meter.main, ai_meter.app, ai_meter.tui.app, ai_meter.collectors.claude_api_usage; print\\('imports OK'\\)\")",
+      "Bash(git add *)",
+      "Bash(git restore *)",
+      "Bash(git commit -m '@ *)",
+      "Bash(git commit --amend -m '[IMP] Robustez: valor de uso en cache, retencion SQLite y alertas de umbral' -m '- claude_api_usage: persiste el ultimo resultado correcto en <data_dir>/claude_usage_cache.json y lo recarga al iniciar; expone age_seconds e is_stale. La TUI muestra el ultimo valor conocido con su antiguedad en vez de '\\\\''unknown'\\\\'' cuando el token OAuth expira o la API falla. *)",
+      "Bash(.venv/Scripts/python.exe -m pytest -q)"
     ]
   }
 }
