@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -391,6 +391,47 @@ class Database:
             return con.execute(
                 "SELECT name, enabled, status, source, last_seen_at, metadata_json FROM providers ORDER BY name"
             ).fetchall()
+
+    def purge_old(self, retention_days: int) -> dict[str, int]:
+        """Delete history older than retention_days. Returns rows removed per table.
+
+        Cleans time-series tables (events, usage_samples) plus sessions that
+        ended before the cutoff and projects no longer referenced. A
+        retention_days <= 0 disables purging (keep everything).
+        """
+        deleted: dict[str, int] = {"events": 0, "usage_samples": 0, "sessions": 0, "projects": 0}
+        if retention_days <= 0:
+            return deleted
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(days=int(retention_days))
+        ).isoformat()
+        with self.connect() as con:
+            cur = con.execute("DELETE FROM events WHERE timestamp < ?", (cutoff,))
+            deleted["events"] = cur.rowcount or 0
+            cur = con.execute("DELETE FROM usage_samples WHERE timestamp < ?", (cutoff,))
+            deleted["usage_samples"] = cur.rowcount or 0
+            # Sessions that have ended before the cutoff and have no remaining
+            # usage/event rows referencing them.
+            cur = con.execute(
+                """
+                DELETE FROM sessions
+                WHERE ended_at IS NOT NULL AND ended_at < ?
+                  AND id NOT IN (SELECT session_id FROM usage_samples WHERE session_id IS NOT NULL)
+                  AND id NOT IN (SELECT session_id FROM events WHERE session_id IS NOT NULL)
+                """,
+                (cutoff,),
+            )
+            deleted["sessions"] = cur.rowcount or 0
+            # Projects no longer referenced by any session, usage or event.
+            cur = con.execute(
+                """
+                DELETE FROM projects
+                WHERE id NOT IN (SELECT project_id FROM sessions WHERE project_id IS NOT NULL)
+                  AND id NOT IN (SELECT project_id FROM events WHERE project_id IS NOT NULL)
+                """
+            )
+            deleted["projects"] = cur.rowcount or 0
+        return deleted
 
     def export_rows(self) -> dict[str, list[dict[str, Any]]]:
         out: dict[str, list[dict[str, Any]]] = {}

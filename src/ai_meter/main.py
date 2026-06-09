@@ -180,6 +180,11 @@ def run() -> None:
         raise typer.Exit(code=2)
 
     persist_db = Database(paths.db_file) if config.app.persist_history else None
+    if persist_db is not None:
+        try:
+            persist_db.purge_old(config.app.retention_days)
+        except Exception:
+            pass
     offset_store = persist_db if persist_db is not None else MemoryOffsetStore()
     import os as _os
     _os.environ.setdefault("TEXTUAL_COLOR_SYSTEM", "truecolor")
@@ -238,6 +243,24 @@ Write-Host 'OK'
         console.print("[green]Uninstalled.[/] Legacy sensor task, driver and output files removed.")
     else:
         console.print(f"[yellow]Nothing to remove or error:[/] {result.stderr.strip()}")
+
+
+@cli.command()
+def prune(
+    days: int = typer.Option(
+        None, "--days", help="Override retention_days from config for this run."
+    ),
+) -> None:
+    """Delete stored history older than retention_days (requires persist_history)."""
+    config, db = _bootstrap()
+    retention = days if days is not None else config.app.retention_days
+    deleted = db.purge_old(retention)
+    table = Table(title=f"Pruned history older than {retention} days")
+    table.add_column("Table")
+    table.add_column("Rows removed", justify="right")
+    for name, count in deleted.items():
+        table.add_row(name, str(count))
+    console.print(table)
 
 
 @cli.command("init")
