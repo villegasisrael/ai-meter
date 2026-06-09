@@ -14,6 +14,9 @@ from pathlib import Path
 from typing import Any
 
 _USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+_TOKEN_URL = "https://console.anthropic.com/v1/oauth/token"
+# Public OAuth client id used by Claude Code (not a secret).
+_OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 _DEFAULT_CACHE_SECONDS = 900
 _TIMEOUT_S = 10
 _CREDENTIALS_NAME = ".credentials.json"
@@ -27,6 +30,8 @@ class ClaudeApiUsageCollector:
         expires_at_ms: int | None = None,
         token_source: str = "env",
         cache_path: Path | None = None,
+        credentials_path: Path | None = None,
+        refresh_token: str | None = None,
     ) -> None:
         # token = full Authorization header value, e.g. "Bearer sk-ant-oat01--..."
         self._token = token
@@ -34,6 +39,12 @@ class ClaudeApiUsageCollector:
         self._expires_at_ms = expires_at_ms
         self._token_source = token_source
         self._cache_path = Path(cache_path) if cache_path else None
+        # Credentials file backing the OAuth token (Claude Code's
+        # ~/.claude/.credentials.json). Tracked so we can (a) reload after the
+        # user re-logs in and (b) refresh the access token automatically.
+        self._credentials_path = Path(credentials_path) if credentials_path else None
+        self._refresh_token = refresh_token
+        self._credentials_mtime = self._current_credentials_mtime()
         self._last_fetch_mono = 0.0
         self._next_retry_mono = 0.0
         self._cached: dict[str, Any] | None = None
@@ -100,7 +111,7 @@ class ClaudeApiUsageCollector:
         path = Path(claude_home) / _CREDENTIALS_NAME
         if not path.exists():
             return None
-        token, expires_at_ms = _parse_token_from_credentials(path)
+        token, expires_at_ms, refresh_token = _parse_token_from_credentials(path)
         if not token:
             return None
         return cls(
@@ -109,6 +120,8 @@ class ClaudeApiUsageCollector:
             expires_at_ms=expires_at_ms,
             token_source="credentials",
             cache_path=cache_path,
+            credentials_path=path,
+            refresh_token=refresh_token,
         )
 
     def _load_cache(self) -> None:
@@ -188,6 +201,8 @@ class ClaudeApiUsageCollector:
         return now_ms >= (self._expires_at_ms - 30_000)
 
     def fetch_if_due(self) -> ParsedUsage | None:
+        # Pick up a re-login or a token Claude Code itself refreshed on disk.
+        self._maybe_reload_credentials()
         if not self.is_due():
             return self._parsed
         return self._do_fetch()
@@ -195,11 +210,132 @@ class ClaudeApiUsageCollector:
     def current(self) -> ParsedUsage | None:
         return self._parsed
 
+    def _current_credentials_mtime(self) -> float | None:
+        if self._credentials_path is None:
+            return None
+        try:
+            return self._credentials_path.stat().st_mtime
+        except OSError:
+            return None
+
+    def _maybe_reload_credentials(self) -> None:
+        """Re-read the credentials file if it changed (e.g. user re-logged in)."""
+        if self._credentials_path is None:
+            return
+        mtime = self._current_credentials_mtime()
+        if mtime is None or mtime == self._credentials_mtime:
+            return
+        token, expires_at_ms, refresh_token = _parse_token_from_credentials(
+            self._credentials_path
+        )
+        self._credentials_mtime = mtime
+        if not token:
+            return
+        if token != self._token:
+            # A new access token landed — force a fresh fetch next tick.
+            self._next_retry_mono = 0.0
+            self._last_fetch_mono = 0.0
+        self._token = token
+        self._expires_at_ms = expires_at_ms
+        if refresh_token:
+            self._refresh_token = refresh_token
+
+    def _refresh_access_token(self) -> bool:
+        """Exchange the refresh token for a new access token and persist it.
+
+        Returns True on success. Best-effort: any failure leaves state intact
+        and surfaces via _last_error.
+        """
+        if not self._refresh_token:
+            return False
+        body = json.dumps(
+            {
+                "grant_type": "refresh_token",
+                "refresh_token": self._refresh_token,
+                "client_id": _OAUTH_CLIENT_ID,
+            }
+        ).encode()
+        req = urllib.request.Request(
+            _TOKEN_URL,
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": "claude-code/2.0.32",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=_TIMEOUT_S) as resp:
+                data = json.loads(resp.read().decode())
+        except Exception as exc:
+            self._last_error = f"token refresh failed: {str(exc)[:90]}"
+            return False
+        access = data.get("access_token")
+        if not isinstance(access, str) or not access.strip():
+            self._last_error = "token refresh failed: no access_token in response"
+            return False
+        self._token = access.strip()
+        if not self._token.lower().startswith("bearer "):
+            self._token = f"Bearer {self._token}"
+        new_refresh = data.get("refresh_token")
+        if isinstance(new_refresh, str) and new_refresh.strip():
+            self._refresh_token = new_refresh.strip()
+        expires_in = _safe_float(data.get("expires_in"))
+        if expires_in is not None:
+            self._expires_at_ms = int(
+                (datetime.now(timezone.utc).timestamp() + expires_in) * 1000
+            )
+        self._persist_refreshed_credentials()
+        return True
+
+    def _persist_refreshed_credentials(self) -> None:
+        """Write the refreshed token back so Claude Code keeps working too."""
+        if self._credentials_path is None:
+            return
+        try:
+            obj = json.loads(
+                self._credentials_path.read_text(encoding="utf-8", errors="ignore")
+            )
+        except Exception:
+            return
+        if not isinstance(obj, dict) or not isinstance(obj.get("claudeAiOauth"), dict):
+            return
+        oauth = obj["claudeAiOauth"]
+        bare = self._token[7:] if self._token.lower().startswith("bearer ") else self._token
+        oauth["accessToken"] = bare
+        if self._refresh_token:
+            oauth["refreshToken"] = self._refresh_token
+        if self._expires_at_ms is not None:
+            oauth["expiresAt"] = self._expires_at_ms
+        try:
+            self._credentials_path.write_text(
+                json.dumps(obj, ensure_ascii=False), encoding="utf-8"
+            )
+            self._credentials_mtime = self._current_credentials_mtime()
+        except Exception:
+            pass
+
     def _do_fetch(self) -> ParsedUsage | None:
         if self._is_token_expired():
-            self._last_error = "OAuth token expired (re-login in Claude Code)"
-            self._next_retry_mono = time.monotonic() + self._cache_seconds
-            return self._parsed
+            # Try to self-heal via the refresh token before giving up.
+            if not self._refresh_access_token():
+                self._last_error = "OAuth token expired (re-login in Claude Code)"
+                self._next_retry_mono = time.monotonic() + self._cache_seconds
+                return self._parsed
+        data = self._request_usage()
+        if data is None:
+            return self._parsed  # error already recorded; return stale
+        self._cached = data
+        self._parsed = ParsedUsage.from_api(data)
+        self._parsed_is_fresh = True
+        self._last_fetch_mono = time.monotonic()
+        self._next_retry_mono = 0.0
+        self._last_error = None
+        self._save_cache(data)
+        return self._parsed
+
+    def _request_usage(self, _allow_refresh: bool = True) -> dict[str, Any] | None:
         req = urllib.request.Request(
             _USAGE_URL,
             headers={
@@ -211,26 +347,21 @@ class ClaudeApiUsageCollector:
         )
         try:
             with urllib.request.urlopen(req, timeout=_TIMEOUT_S) as resp:
-                data = json.loads(resp.read().decode())
-            self._cached = data
-            self._parsed = ParsedUsage.from_api(data)
-            self._parsed_is_fresh = True
-            self._last_fetch_mono = time.monotonic()
-            self._next_retry_mono = 0.0
-            self._last_error = None
-            self._save_cache(data)
-            return self._parsed
+                return json.loads(resp.read().decode())
         except urllib.error.HTTPError as exc:
+            if exc.code in (401, 403) and _allow_refresh and self._refresh_access_token():
+                # Auth rejected but refresh succeeded — retry once.
+                return self._request_usage(_allow_refresh=False)
             if exc.code == 429:
                 retry_after = _parse_retry_after_seconds(exc.headers.get("Retry-After"))
                 self._next_retry_mono = time.monotonic() + retry_after
                 self._last_error = f"HTTP 429: Too Many Requests (retry in {retry_after}s)"
             else:
                 self._last_error = f"HTTP Error {exc.code}: {exc.reason}"
-            return self._parsed  # return stale on error
+            return None
         except Exception as exc:
             self._last_error = str(exc)[:120]
-            return self._parsed  # return stale on error
+            return None
 
 
 class ParsedUsage:
@@ -385,19 +516,21 @@ def _parse_token_from_env(path: Path) -> str | None:
         return None
 
 
-def _parse_token_from_credentials(path: Path) -> tuple[str | None, int | None]:
+def _parse_token_from_credentials(
+    path: Path,
+) -> tuple[str | None, int | None, str | None]:
     try:
         obj = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
     except Exception:
-        return None, None
+        return None, None, None
     if not isinstance(obj, dict):
-        return None, None
+        return None, None, None
     oauth = obj.get("claudeAiOauth")
     if not isinstance(oauth, dict):
-        return None, None
+        return None, None, None
     token = oauth.get("accessToken")
     if not isinstance(token, str) or not token.strip():
-        return None, None
+        return None, None, None
     token = token.strip()
     if not token.lower().startswith("bearer "):
         token = f"Bearer {token}"
@@ -405,7 +538,9 @@ def _parse_token_from_credentials(path: Path) -> tuple[str | None, int | None]:
         expires_at_ms = int(oauth.get("expiresAt"))
     except (TypeError, ValueError):
         expires_at_ms = None
-    return token, expires_at_ms
+    refresh = oauth.get("refreshToken")
+    refresh_token = refresh.strip() if isinstance(refresh, str) and refresh.strip() else None
+    return token, expires_at_ms, refresh_token
 
 
 def _parse_retry_after_seconds(value: Any) -> int:

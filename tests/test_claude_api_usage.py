@@ -51,5 +51,45 @@ class CacheTests(unittest.TestCase):
             self.assertFalse(collector.is_stale)
 
 
+class CredentialsTests(unittest.TestCase):
+    def _write_creds(self, home: Path, token: str, refresh: str = "r-1") -> Path:
+        home.mkdir(parents=True, exist_ok=True)
+        path = home / ".credentials.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "claudeAiOauth": {
+                        "accessToken": token,
+                        "refreshToken": refresh,
+                        "expiresAt": int(datetime.now(timezone.utc).timestamp() * 1000) + 3_600_000,
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        return path
+
+    def test_from_credentials_loads_refresh_token(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / ".claude"
+            self._write_creds(home, "tok-1", refresh="refresh-abc")
+            collector = ClaudeApiUsageCollector.from_credentials(home)
+            self.assertIsNotNone(collector)
+            self.assertEqual(collector._refresh_token, "refresh-abc")
+            self.assertEqual(collector._token, "Bearer tok-1")
+
+    def test_reload_picks_up_new_token(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / ".claude"
+            self._write_creds(home, "tok-1")
+            collector = ClaudeApiUsageCollector.from_credentials(home)
+            # Simulate a re-login writing a new token with a newer mtime.
+            path = self._write_creds(home, "tok-2")
+            import os
+            os.utime(path, (path.stat().st_atime, path.stat().st_mtime + 10))
+            collector._maybe_reload_credentials()
+            self.assertEqual(collector._token, "Bearer tok-2")
+
+
 if __name__ == "__main__":
     unittest.main()
