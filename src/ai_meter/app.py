@@ -112,6 +112,29 @@ class MonitorEngine:
         except Exception:
             pass
 
+    def reload_claude_api(self) -> bool:
+        """Rebuild the Claude usage collector from disk (e.g. after a re-login).
+
+        Returns True if a collector was (re)created. Used by the TUI to pick up
+        fresh credentials immediately instead of waiting for the mtime watch.
+        """
+        if not (
+            self.config.providers.claude.enabled
+            and self.config.providers.claude.usage_api_enabled
+        ):
+            return False
+        collector = ClaudeApiUsageCollector.from_sources(
+            claude_home=self.paths.claude_home,
+            cache_seconds=self.config.providers.claude.usage_api_interval_s,
+            cache_path=getattr(self.paths, "data_dir", None)
+            and self.paths.data_dir / "claude_usage_cache.json",
+        )
+        with self._lock:
+            self.claude_api = collector
+            if collector is not None:
+                self._claude_api_usage = collector.current() or self._claude_api_usage
+        return collector is not None
+
     def _check_claude_api_alerts(self, usage: ParsedUsage) -> None:
         threshold = float(self.config.app.alert_threshold_pct)
         if not self.config.app.alert_enabled or threshold <= 0:

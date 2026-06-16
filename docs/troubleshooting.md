@@ -78,6 +78,11 @@ Revisar:
 - `401`: token OAuth invalido o expirado.
 - `429`: rate limit; el collector aplica backoff.
 
+Si la TUI muestra `token expired, relogin in Claude Code`, el refresh automatico ya no funciona
+(refresh token vencido). Pulsa `l` en la TUI para hacer el re-login OAuth dentro de la app: se abre
+el navegador, autorizas, y pegas el codigo `code#state` que muestra Claude. Se reescribe
+`~/.claude/.credentials.json` y el panel se reanuda solo. (Alternativa: `/login` en Claude Code.)
+
 Para no depender de esa API:
 
 ```toml

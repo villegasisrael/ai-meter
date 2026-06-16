@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import re
 import time
+import webbrowser
 from datetime import datetime, timezone
+from functools import partial
 from typing import Any
 
 from textual.app import App, ComposeResult
@@ -12,7 +14,9 @@ from textual.timer import Timer
 from textual.widgets import Footer, Static
 
 from ai_meter.app import MonitorEngine
+from ai_meter.collectors.claude_oauth import OAuthLoginFlow, write_credentials
 from ai_meter.models import RuntimeState
+from ai_meter.tui.relogin import ReloginModal
 from ai_meter.tui.widgets import (
     cpu_gradient_color,
     latest_field,
@@ -34,6 +38,7 @@ class AiMeterTui(App[None]):
         Binding("p", "pause", "Pause"),
         Binding("c", "toggle_claude", "Claude"),
         Binding("x", "toggle_codex", "Codex"),
+        Binding("l", "relogin", "Re-login"),
         Binding("+", "slower", "More ms"),
         Binding("=", "slower", "More ms"),
         Binding("-", "faster", "Less ms"),
@@ -158,7 +163,76 @@ class AiMeterTui(App[None]):
         self._render_snapshot(force=True)
 
     def action_help(self) -> None:
-        self.notify("keys: q r p c x -/+ h 1-7")
+        self.notify("keys: q r p c x l -/+ h 1-7")
+
+    def action_relogin(self) -> None:
+        if not self.engine.provider_enabled("claude"):
+            self.notify("Claude disabled in config")
+            return
+        flow = OAuthLoginFlow()
+        try:
+            webbrowser.open(flow.authorize_url)
+        except Exception:
+            pass
+        self.push_screen(
+            ReloginModal(flow.authorize_url), partial(self._on_relogin_code, flow)
+        )
+
+    def _on_relogin_code(self, flow: OAuthLoginFlow, code: str | None) -> None:
+        if not code:
+            self.notify("Re-login cancelado")
+            return
+        self.notify("Validando código…")
+        self.run_worker(
+            partial(self._blocking_relogin, flow, code),
+            thread=True,
+            exclusive=True,
+            group="relogin",
+        )
+
+    def _blocking_relogin(self, flow: OAuthLoginFlow, code: str) -> None:
+        """Runs off the UI thread: exchange the code and persist credentials."""
+        try:
+            token = flow.exchange(code)
+            write_credentials(self.engine.paths.claude_home, token)
+        except Exception as exc:
+            self.call_from_thread(self._on_relogin_error, str(exc)[:200])
+            return
+        self.call_from_thread(self._on_relogin_done)
+
+    def _on_relogin_error(self, message: str) -> None:
+        self.notify(
+            f"Re-login falló: {message}",
+            severity="error",
+            timeout=10,
+            markup=False,
+        )
+
+    def _on_relogin_done(self) -> None:
+        self.engine.reload_claude_api()
+        collector = self.engine.claude_api
+        if collector is None:
+            self.notify("Re-login OK — credenciales guardadas")
+            self._render_snapshot(force=True)
+            return
+        if self._api_worker is None:
+            self._api_worker = PeriodicWorker(
+                "claude-api",
+                self.engine.run_claude_api_collection,
+                float(collector.cache_seconds),
+                should_run=lambda: not self.state.paused,
+            )
+            self._api_worker.start(initial_delay_s=0.0)
+        self._api_worker.trigger(force=True)
+        if collector.token_source == "env":
+            self.notify(
+                "Token guardado, pero un TOKEN en .env tiene prioridad y lo oculta.",
+                severity="warning",
+                timeout=10,
+            )
+        else:
+            self.notify("Re-login OK — token actualizado")
+        self._render_snapshot(force=True)
 
     def action_toggle_claude(self) -> None:
         if not self.engine.provider_enabled("claude"):
