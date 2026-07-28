@@ -16,6 +16,7 @@ from textual.widgets import Footer, Static
 from ai_meter.app import MonitorEngine
 from ai_meter.collectors.claude_oauth import OAuthLoginFlow, write_credentials
 from ai_meter.models import RuntimeState
+from ai_meter.tui.hardware import HardwarePanelRenderer, HardwarePanelSpec
 from ai_meter.tui.relogin import ReloginModal
 from ai_meter.tui.widgets import (
     cpu_gradient_color,
@@ -25,7 +26,6 @@ from ai_meter.tui.widgets import (
     render_bar,
     render_core_grid,
     render_cpu_history_graph,
-    render_temp_bar,
     usage_values,
 )
 from ai_meter.tui.workers import PeriodicWorker
@@ -50,6 +50,7 @@ class AiMeterTui(App[None]):
         Binding("5", "view('5')", "Activity"),
         Binding("6", "view('6')", "Storage"),
         Binding("7", "view('7')", "Settings"),
+        Binding("8", "view('8')", "Hardware+"),
     ]
 
     CSS = """
@@ -72,6 +73,7 @@ class AiMeterTui(App[None]):
     .panel { border: round #2a3f52; padding: 0 1; margin: 0 1 1 0; }
     #claude_panel { height: 1fr; margin: 0 1 1 0; border: round #2a3f52; padding: 0 1; }
     #codex_panel  { height: 1fr; margin: 0 1 1 0; border: round #2a3f52; padding: 0 1; }
+    #hardware     { height: auto; margin: 0 0 1 0; border: round #5a3a18; padding: 0 1; }
     #system       { height: auto; margin: 0 0 1 0; border: round #2a3f52; padding: 0 1; }
     #events       { height: 1fr; margin: 0 0 1 0; border: round #2a3f52; padding: 0 1; }
     """
@@ -87,8 +89,22 @@ class AiMeterTui(App[None]):
         self._render_timer: Timer | None = None
         self._light_worker: PeriodicWorker | None = None
         self._heavy_worker: PeriodicWorker | None = None
+        self._hardware_worker: PeriodicWorker | None = None
         self._api_worker: PeriodicWorker | None = None
         self._last_section_render: dict[str, float] = {}
+        self._hardware_renderer = HardwarePanelRenderer()
+        self._hardware_overview_panel = HardwarePanelSpec(
+            id="hardware",
+            title="HARDWARE",
+            kinds=("temperature",),
+            max_items=2,
+        )
+        self._hardware_advanced_panel = HardwarePanelSpec(
+            id="hardware",
+            title="HARDWARE ADVANCED",
+            kinds=tuple(self.engine.config.ui.hardware_metric_kinds),
+            max_items=16,
+        )
 
     def compose(self) -> ComposeResult:
         yield Static("", id="status_line")
@@ -104,17 +120,25 @@ class AiMeterTui(App[None]):
                     if self._show_codex:
                         yield Static("", id="codex_panel")
             with Vertical(id="right_panel"):
+                if self.engine.config.providers.hardware.enabled:
+                    yield Static("", id="hardware")
                 yield Static("", id="system")
                 yield Static("", id="events")
         yield Footer()
 
     def on_mount(self) -> None:
+        self._sync_view_visibility()
         self._start_timers()
         self._start_workers()
         self._render_snapshot(force=True)
 
     def on_unmount(self) -> None:
-        for worker in (self._light_worker, self._heavy_worker, self._api_worker):
+        for worker in (
+            self._light_worker,
+            self._heavy_worker,
+            self._hardware_worker,
+            self._api_worker,
+        ):
             if worker is not None:
                 worker.stop(timeout_s=0.5)
 
@@ -140,6 +164,18 @@ class AiMeterTui(App[None]):
         )
         self._light_worker.start(initial_delay_s=0.05)
         self._heavy_worker.start(initial_delay_s=0.15)
+        if self.engine.config.providers.hardware.enabled:
+            hardware_s = max(
+                1.0,
+                float(self.engine.config.providers.hardware.poll_interval_ms) / 1000.0,
+            )
+            self._hardware_worker = PeriodicWorker(
+                "hardware",
+                self.engine.run_hardware_collection,
+                hardware_s,
+                should_run=lambda: not self.state.paused,
+            )
+            self._hardware_worker.start(initial_delay_s=0.1)
         if self.engine.claude_api is not None:
             self._api_worker = PeriodicWorker(
                 "claude-api",
@@ -154,6 +190,8 @@ class AiMeterTui(App[None]):
             self._light_worker.trigger(force=True)
         if self._heavy_worker is not None:
             self._heavy_worker.trigger(force=True)
+        if self._hardware_worker is not None:
+            self._hardware_worker.trigger(force=True)
         if self._api_worker is not None:
             self._api_worker.trigger(force=True)
         self._render_snapshot(force=True)
@@ -163,7 +201,7 @@ class AiMeterTui(App[None]):
         self._render_snapshot(force=True)
 
     def action_help(self) -> None:
-        self.notify("keys: q r p c x l -/+ h 1-7")
+        self.notify("keys: q r p c x l -/+ h 1-8")
 
     def action_relogin(self) -> None:
         if not self.engine.provider_enabled("claude"):
@@ -266,6 +304,7 @@ class AiMeterTui(App[None]):
 
     def action_view(self, num: str) -> None:
         self.current_view = num
+        self._sync_view_visibility()
         self._render_snapshot(force=True)
 
     def _render_snapshot(self, force: bool = False) -> None:
@@ -422,6 +461,23 @@ class AiMeterTui(App[None]):
                 f"samples: {len(snap.codex_usage)}"
             )
 
+        if self.engine.config.providers.hardware.enabled and self._section_due(
+            "hardware", self.engine.config.ui.hardware_render_interval_ms, now, force
+        ):
+            hardware_widget = self.query_one("#hardware", Static)
+            hardware_widget.update(
+                self._hardware_renderer.render(
+                    (
+                        self._hardware_advanced_panel
+                        if self.current_view == "8"
+                        else self._hardware_overview_panel
+                    ),
+                    snap.hardware_metrics,
+                    snap.hardware_provider_status,
+                    self._panel_content_width(hardware_widget),
+                )
+            )
+
         if self._section_due(
             "system", self.engine.config.ui.system_render_interval_ms, now, force
         ):
@@ -507,33 +563,10 @@ class AiMeterTui(App[None]):
 
         ram = float(meta.get("ram_percent", 0.0))
         disk = float(meta.get("disk_percent", 0.0))
-        cpu_temp = meta.get("cpu_temp_c")
-        temp_source = str(meta.get("cpu_temp_source", "unknown"))
-        gpu_temp = meta.get("gpu_temp_c")
-        gpu_name = str(meta.get("gpu_name") or "GPU")
-        gpu_source = str(meta.get("gpu_temp_source") or "unknown")
-        needs_admin = bool(meta.get("needs_admin"))
         net_up = float(meta.get("net_sent_mb", 0.0))
         net_dn = float(meta.get("net_recv_mb", 0.0))
         top = meta.get("top_processes", [])
         bar_width = max(16, min(160, width - 18))
-        temp_bar_width = max(14, min(120, width - 38))
-
-        # CPU temperature bar (100°C = critical)
-        if isinstance(cpu_temp, (int, float)):
-            cpu_temp_str = render_temp_bar(cpu_temp, max_temp=100.0, width=temp_bar_width) + f" [grey50]({temp_source})[/]"
-        elif needs_admin:
-            cpu_temp_str = "[grey50]driver blocked[/]"
-        else:
-            cpu_temp_str = f"[grey50]unknown ({temp_source})[/]"
-
-        # GPU temperature bar
-        gpu_label = gpu_name.split()[-1] if gpu_name else "GPU"
-        if isinstance(gpu_temp, (int, float)):
-            source_label = gpu_source if gpu_source != "unknown" else gpu_label
-            gpu_temp_str = render_temp_bar(gpu_temp, max_temp=100.0, width=temp_bar_width) + f" [grey50]({source_label})[/]"
-        else:
-            gpu_temp_str = f"[grey50]unknown ({gpu_source})[/]"
 
         # Network — pick unit automatically
         def _fmt_net(mb: float) -> str:
@@ -543,8 +576,6 @@ class AiMeterTui(App[None]):
             "[bold green]SYSTEM[/]",
             f"ram  {render_bar(ram, bar_width)}",
             f"disk {render_bar(disk, bar_width)}",
-            f"temp {cpu_temp_str}",
-            f"gpu  {gpu_temp_str}",
             f"net  [#00ddcc]↑[/]{_fmt_net(net_up)}  [#ff8800]↓[/]{_fmt_net(net_dn)}",
             "processes:",
         ]
@@ -619,7 +650,7 @@ class AiMeterTui(App[None]):
         return visible
 
     def _sync_ai_visibility(self) -> None:
-        visible = bool(self._visible_ai_providers())
+        visible = bool(self._visible_ai_providers()) and self.current_view != "8"
         for widget in self.query("#claude_panel"):
             widget.display = self._show_claude
         for widget in self.query("#codex_panel"):
@@ -634,6 +665,16 @@ class AiMeterTui(App[None]):
             bottom_row.remove_class("no-ai")
         else:
             bottom_row.add_class("no-ai")
+
+    def _sync_view_visibility(self) -> None:
+        hardware_advanced = self.current_view == "8"
+        for widget in self.query("#top_row"):
+            widget.display = not hardware_advanced
+        for widget in self.query("#system"):
+            widget.display = not hardware_advanced
+        for widget in self.query("#events"):
+            widget.display = not hardware_advanced
+        self._sync_ai_visibility()
 
     def _render_api_limit(
         self, pct: float | None, reset_secs: int | None, width: int

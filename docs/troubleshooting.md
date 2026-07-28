@@ -23,7 +23,32 @@ No desactivar Memory Integrity/HVCI para ai-meter. La temperatura debe caer a `u
 
 ## Temperatura CPU/GPU unknown
 
-En Windows, muchas CPUs AMD Ryzen no publican temperatura por una API de usuario estandar. Si WMI/ACPI no expone el dato, `ai-meter` debe mostrar `unknown`.
+En Windows no existe una API genérica y confiable para la temperatura de todos
+los CPUs. `doctor` muestra `cpu vendor` y carga sólo el adaptador correspondiente.
+
+Para AMD, diferencia estas rutas:
+
+- `wmi:admin_required`: WMI no se intentó porque la sesión no está elevada.
+- `amd=sdk_not_installed`: AMD Ryzen Master Monitoring SDK no está instalado.
+- `amd=probe_not_built`: falta compilar `ai-meter-amd-probe.exe`.
+- `amd=admin_required`: abrir PowerShell como administrador.
+- `amd=driver_not_installed` o `driver_not_running`: el servicio oficial del SDK
+  no está disponible; ai-meter no lo instala ni lo inicia.
+
+Para Intel, ai-meter usa WMI/ACPI cuando el firmware entrega una lectura
+confiable. En caso contrario muestra `intel=no_supported_provider`; no intenta
+cargar Ryzen Master ni instala drivers Intel.
+
+Con el SDK ya instalado:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_native.ps1
+.\.venv\Scripts\python.exe -m ai_meter.main doctor
+```
+
+Si el ejecutable existe pero falla, revisar `hardware providers` en `doctor`.
+No usar `python` a secas si apunta al Python de Inkscape. `ai-meter` no instala
+el driver ni acepta la licencia del SDK por el usuario.
 
 Validar GPU:
 

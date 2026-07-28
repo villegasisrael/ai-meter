@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import typer
@@ -15,6 +16,9 @@ from rich.table import Table
 from ai_meter.app import MonitorEngine
 from ai_meter.collectors.system import SystemCollector
 from ai_meter.config import AppConfig, ConfigManager
+from ai_meter.hardware.cpu_identity import detect_cpu_identity
+from ai_meter.hardware.factory import create_hardware_providers
+from ai_meter.hardware.registry import HardwareRegistry
 from ai_meter.paths import resolve_app_paths
 from ai_meter.runtime_store import MemoryOffsetStore
 from ai_meter.storage.db import Database
@@ -71,37 +75,106 @@ def doctor() -> None:
     table.add_row("claude history.jsonl", str((claude_home / "history.jsonl").exists()).lower())
     table.add_row("claude stats-cache.json", str((claude_home / "stats-cache.json").exists()).lower())
 
-    system_batch = SystemCollector(
+    system_collector = SystemCollector(
         winprobe_interval_ms=config.app.winprobe_interval_ms,
         sensor_probe_enabled=config.app.sensor_probe_enabled,
-    ).collect(include_temp=True, include_top=False)
+    )
+    system_batch = system_collector.collect(include_temp=False, include_top=False)
     system_meta = system_batch.provider_status.metadata if system_batch.provider_status else {}
     native_status = system_meta.get("native_winprobe", {}) if isinstance(system_meta, dict) else {}
-    temp_c = system_meta.get("cpu_temp_c") if isinstance(system_meta, dict) else None
-    temp_source = system_meta.get("cpu_temp_source") if isinstance(system_meta, dict) else "unknown"
+    if (
+        isinstance(native_status, dict)
+        and native_status.get("available")
+        and system_meta.get("metrics_source") != "winprobe_cpp"
+    ):
+        time.sleep(0.35)
+        system_batch = system_collector.collect(include_temp=False, include_top=False)
+        system_meta = (
+            system_batch.provider_status.metadata if system_batch.provider_status else {}
+        )
+        native_status = (
+            system_meta.get("native_winprobe", {})
+            if isinstance(system_meta, dict)
+            else {}
+        )
     temp_probe = system_meta.get("cpu_temp_probe", {}) if isinstance(system_meta, dict) else {}
-    gpu_temp_c = system_meta.get("gpu_temp_c") if isinstance(system_meta, dict) else None
-    gpu_name = system_meta.get("gpu_name") if isinstance(system_meta, dict) else None
-    gpu_source = system_meta.get("gpu_temp_source") if isinstance(system_meta, dict) else "unknown"
     core_count = len(system_meta.get("core_loads") or []) if isinstance(system_meta, dict) else 0
-    needs_admin = bool(system_meta.get("needs_admin")) if isinstance(system_meta, dict) else False
-    from_service = bool(temp_probe.get("from_service")) if isinstance(temp_probe, dict) else False
+
+    hardware_config = config.providers.hardware
+    cpu_identity = detect_cpu_identity()
+    hardware_registry = HardwareRegistry(
+        providers=create_hardware_providers(
+            system_collector,
+            hardware_config.amd_probe_path.strip() or None,
+            cpu_identity,
+        ),
+        source_priority=hardware_config.source_priority,
+    )
+    hardware_metrics = hardware_registry.collect() if hardware_config.enabled else []
+    hardware_status = hardware_registry.status_snapshot()
+    cpu_metric = next(
+        (
+            metric
+            for metric in hardware_metrics
+            if metric.device_type == "cpu" and metric.kind == "temperature"
+        ),
+        None,
+    )
+    gpu_metric = next(
+        (
+            metric
+            for metric in hardware_metrics
+            if metric.device_type == "gpu" and metric.kind == "temperature"
+        ),
+        None,
+    )
+    platform_status = hardware_status.get("platform", {})
+    platform_metadata = (
+        platform_status.get("metadata", {}) if isinstance(platform_status, dict) else {}
+    )
+    platform_sources = (
+        platform_metadata.get("sources", []) if isinstance(platform_metadata, dict) else []
+    )
+    missing_cpu_source = next(
+        (
+            str(source)
+            for source in platform_sources
+            if str(source).startswith(("wmi:", "linux:"))
+        ),
+        "unknown",
+    )
+
     table.add_row("system metrics_source", str(system_meta.get("metrics_source", "unknown")))
     table.add_row("native winprobe", json.dumps(native_status, ensure_ascii=False))
-    table.add_row("sensor probe enabled", str(config.app.sensor_probe_enabled).lower())
-    table.add_row("sensor probe", json.dumps(temp_probe, ensure_ascii=False))
-    if temp_c is not None:
-        cpu_temp_str = f"{temp_c} C ({temp_source})"
-    elif needs_admin and from_service:
-        cpu_temp_str = f"unknown ({temp_source}) - driver blocked"
-    elif needs_admin:
-        cpu_temp_str = f"unknown ({temp_source}) - sensor probe disabled"
+    table.add_row("cpu vendor", f"{cpu_identity.vendor} ({cpu_identity.vendor_id})")
+    table.add_row("hardware enabled", str(hardware_config.enabled).lower())
+    table.add_row("hardware providers", json.dumps(hardware_status, ensure_ascii=False))
+    table.add_row("hardware metrics", str(len(hardware_metrics)))
+    table.add_row("legacy sensor probe", str(config.app.sensor_probe_enabled).lower())
+    table.add_row("legacy sensor status", json.dumps(temp_probe, ensure_ascii=False))
+    if cpu_metric is not None:
+        cpu_temp_str = f"{cpu_metric.value} C ({cpu_metric.source})"
     else:
-        cpu_temp_str = f"unknown ({temp_source})"
+        details = [missing_cpu_source]
+        if cpu_identity.vendor == "amd":
+            amd_status = hardware_status.get("amd_ryzen_master", {})
+            amd_detail = (
+                str(amd_status.get("detail", "unknown"))
+                if isinstance(amd_status, dict)
+                else "unknown"
+            )
+            details.append(f"amd={amd_detail}")
+        elif cpu_identity.vendor == "intel":
+            details.append("intel=no_supported_provider")
+        cpu_temp_str = f"unknown ({'; '.join(details)})"
     table.add_row("cpu temp", cpu_temp_str)
     table.add_row(
         "gpu temp",
-        f"{gpu_temp_c} C ({gpu_name}; {gpu_source})" if gpu_temp_c is not None else f"unknown ({gpu_source})",
+        (
+            f"{gpu_metric.value} C ({gpu_metric.label}; {gpu_metric.source})"
+            if gpu_metric is not None
+            else "unknown"
+        ),
     )
     table.add_row("cpu cores tracked", str(core_count))
 

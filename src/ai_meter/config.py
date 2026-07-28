@@ -44,6 +44,11 @@ class ClaudeProviderSection(ProviderSection):
     usage_api_interval_s: int = 900
 
 
+class HardwareProviderSection(ProviderSection):
+    poll_interval_ms: int = 1000
+    amd_probe_path: str = ""
+
+
 class ProvidersSection(BaseModel):
     codex: ProviderSection = Field(
         default_factory=lambda: ProviderSection(source_priority=["sessions_jsonl", "logs_sqlite"])  # noqa: E501
@@ -54,6 +59,19 @@ class ProvidersSection(BaseModel):
     system: ProviderSection = Field(
         default_factory=lambda: ProviderSection(source_priority=["psutil"])
     )
+    hardware: HardwareProviderSection = Field(
+        default_factory=lambda: HardwareProviderSection(
+            source_priority=[
+                "amd_ryzen_master",
+                "nvml",
+                "nvidia_smi",
+                "amd_smi",
+                "rocm_smi",
+                "linux_hwmon",
+                "wmi",
+            ]
+        )
+    )
 
 
 class UISection(BaseModel):
@@ -61,6 +79,17 @@ class UISection(BaseModel):
     max_events: int = 200
     cpu_render_interval_ms: int = 250
     system_render_interval_ms: int = 500
+    hardware_render_interval_ms: int = 1000
+    hardware_metric_kinds: list[str] = Field(
+        default_factory=lambda: [
+            "temperature",
+            "power",
+            "voltage",
+            "frequency",
+            "utilization",
+            "fan_speed",
+        ]
+    )
     ai_render_interval_ms: int = 1000
     events_render_interval_ms: int = 500
 

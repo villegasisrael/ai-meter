@@ -41,5 +41,6 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 ai_meter = [
+  "bin/win-x64/ai-meter-amd-probe.exe",
   "bin/win-x64/ai-meter-winprobe.exe",
 ]

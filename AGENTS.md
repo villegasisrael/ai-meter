@@ -93,3 +93,7 @@ Mantener solo documentacion operativa necesaria:
 - `docs/troubleshooting.md`
 
 Actualizarla cuando cambien fuentes de datos, comandos, timers, servicio legacy o decisiones de performance.
+
+## Imported Claude Cowork project instructions
+
+ai-meter
