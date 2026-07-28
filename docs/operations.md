@@ -27,6 +27,7 @@ python -m ai_meter.main paths
 - estado de Claude usage API
 - homes de Codex/Claude
 - fuente de metricas sistema
+- estado de cada proveedor de hardware
 - temperatura CPU/GPU como valor real o `unknown`
 
 Comandos utiles si GPU aparece `unknown`:
@@ -36,6 +37,18 @@ nvidia-smi --query-gpu=name,temperature.gpu --format=csv,noheader,nounits
 amd-smi monitor --temperature
 rocm-smi --showtemp --json
 ```
+
+Con AMD Ryzen Master Monitoring SDK instalado, compilar y diagnosticar desde una
+PowerShell como administrador:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_native.ps1
+.\.venv\Scripts\python.exe -m ai_meter.main doctor
+```
+
+`doctor` debe mostrar `amd_ryzen_master.available=true`, la ruta autodetectada y
+una temperatura CPU. El probe acepta `--once`, emite JSON y nunca crea ni inicia
+el driver de AMD.
 
 ## Limpieza legacy
 
@@ -52,11 +65,12 @@ Ejecutar como administrador. El comando elimina la tarea `ai-meter-sensor`, el s
 ## Build
 
 ```powershell
-.\scripts\build_native.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_native.ps1
 .\scripts\build_exe.ps1
 ```
 
-`build_native.ps1` recompila `ai-meter-winprobe.exe` si hay `g++`.
+`build_native.ps1` recompila `ai-meter-winprobe.exe` si hay `g++` y
+`ai-meter-amd-probe.exe` si existen Visual Studio 2022 C++ Build Tools y el SDK AMD.
 
 ## Pruebas
 

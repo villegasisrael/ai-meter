@@ -346,6 +346,21 @@ class SystemCollector(Collector):
         else:
             self._cached_core_loads = []
 
+    def read_temperature_snapshot(self) -> dict[str, Any]:
+        """Read safe platform temperature sources for the hardware registry."""
+        cpu_temp, cpu_source = self._read_platform_temp_fallback()
+        gpu_temp, gpu_name, gpu_source, gpu_readings = (
+            self._read_platform_gpu_temp_fallback()
+        )
+        return {
+            "cpu_temp_c": cpu_temp,
+            "cpu_source": cpu_source,
+            "gpu_temp_c": gpu_temp,
+            "gpu_name": gpu_name,
+            "gpu_source": gpu_source,
+            "gpu_readings": gpu_readings,
+        }
+
     def _refresh_platform_temp_fallbacks(self) -> None:
         fallback_temp, fallback_source = self._read_platform_temp_fallback()
         if fallback_temp is not None:
@@ -811,6 +826,9 @@ class NativeWinProbeSampler:
             if isinstance(obj, dict):
                 with self._lock:
                     self._latest = obj
+        with self._lock:
+            if self._process is proc:
+                self._process = None
 
 
 def _parse_csv_gpu_temperatures(text: str, source: str) -> list[dict[str, Any]]:

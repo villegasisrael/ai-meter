@@ -36,6 +36,8 @@ class ConfigCollectorTests(unittest.TestCase):
         self.assertTrue(config.providers.claude.usage_api_enabled)
         self.assertGreaterEqual(config.providers.claude.usage_api_interval_s, 60)
         self.assertFalse(config.app.sensor_probe_enabled)
+        self.assertTrue(config.providers.hardware.enabled)
+        self.assertGreaterEqual(config.providers.hardware.poll_interval_ms, 1000)
 
     def test_usage_collector_loads_oauth_token_from_credentials(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -91,6 +93,11 @@ class ConfigCollectorTests(unittest.TestCase):
             self.assertTrue(loaded.providers.claude.usage_api_enabled)
             self.assertEqual(loaded.providers.claude.usage_api_interval_s, 1200)
             self.assertFalse(loaded.app.sensor_probe_enabled)
+            self.assertTrue(loaded.providers.hardware.enabled)
+            self.assertIn(
+                "amd_ryzen_master",
+                loaded.providers.hardware.source_priority,
+            )
 
     def test_system_collector_does_not_run_sensor_probe_by_default(self) -> None:
         collector = SystemCollector(sensor_probe_enabled=False)

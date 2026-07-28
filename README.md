@@ -10,7 +10,9 @@ Monitor TUI local para Windows y Linux. Muestra uso de Codex/Claude, actividad r
   - Codex: `~/.codex`
   - Claude: `~/.claude`
 
-No requiere servicios, drivers ni llamadas a modelos. En Windows incluye un probe nativo de usuario para metricas rapidas; en Linux usa `psutil`.
+No hace llamadas a modelos ni instala servicios o drivers. En Windows incluye
+probes nativos de usuario para métricas rápidas; el probe opcional de AMD usa
+un Ryzen Master Monitoring SDK que el usuario ya haya instalado.
 
 ## Instalacion en Windows
 
@@ -60,7 +62,11 @@ ai-meter run
 
 La version de Python debe ser 3.11 o superior. En Ubuntu 24.04+ `python3` normalmente cumple; en versiones anteriores puede requerir instalar Python 3.11+ por separado.
 
-La temperatura solo aparece si el sistema ya expone sensores seguros: CPU via WMI/ACPI en sesion elevada o kernel Linux, GPU via `nvidia-smi`, `amd-smi`/`rocm-smi` o `hwmon`. Si no hay fuente confiable, se muestra `unknown`.
+La temperatura se normaliza en el registro de hardware. El fabricante del CPU
+se detecta antes de cargar adaptadores: AMD puede usar el probe incluido
+construido con Ryzen Master Monitoring SDK; Intel usa por ahora WMI/ACPI seguro.
+GPU usa `nvidia-smi`, `amd-smi`/`rocm-smi` o `hwmon`. Si no hay una fuente
+confiable y vigente, se muestra `unknown`.
 
 ## Uso
 
@@ -127,10 +133,15 @@ Remove-Item ".\src\ai_meter\bin\win-x64\ai-meter-sensor-probe.sys" -Force -Error
 | Claude limites 5h/semanal | OAuth usage API opcional | `unknown` |
 | CPU/RAM/disk/net | Windows: `ai-meter-winprobe.exe`; Linux: `psutil` | `psutil` |
 | CPU cores | `psutil.cpu_times(percpu=True)` por delta | `unknown` |
-| CPU temp | Windows: WMI/ACPI si el sistema lo expone y la sesion esta elevada; Linux: `psutil.sensors_temperatures()` / `hwmon` (`k10temp`, `coretemp`) | `unknown` |
+| CPU temp | Windows AMD: probe incluido + Ryzen Master Monitoring SDK instalado; Windows Intel: WMI/ACPI; Linux: `psutil.sensors_temperatures()` / `hwmon` | `unknown` |
 | GPU temp | NVIDIA: `nvidia-smi`; AMD: `amd-smi` en ruta ROCm acotada o `AI_METER_AMD_SMI` / `rocm-smi`; Linux: `hwmon` (`amdgpu`, `nouveau`) | `unknown` |
 
-La temperatura puede quedar en `unknown`. No se instala ningun driver kernel para leer sensores.
+Las métricas de hardware llevan `id`, dispositivo, tipo, valor, unidad, fuente,
+timestamp y caducidad. La TUI las renderiza mediante `HardwarePanelSpec`, por lo
+que nuevas métricas no requieren modificar el collector de sistema.
+
+La temperatura puede quedar en `unknown`. `ai-meter` no instala ningún SDK,
+servicio ni driver kernel para leer sensores.
 
 ## Anti-Tampering / driver legacy
 
@@ -157,14 +168,31 @@ enabled = true
 usage_api_enabled = true
 usage_api_interval_s = 900
 
+[providers.hardware]
+enabled = true
+poll_interval_ms = 1000
+source_priority = ["amd_ryzen_master", "nvml", "nvidia_smi", "amd_smi", "rocm_smi", "linux_hwmon", "wmi"]
+amd_probe_path = ""
+
 [app]
 persist_history = false
 ```
 
+Con el SDK de AMD ya instalado, el probe incluido se detecta automáticamente.
+En desarrollo usa siempre el Python del proyecto:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_native.ps1
+.\.venv\Scripts\python.exe -m ai_meter.main doctor
+```
+
+La lectura del SDK requiere una PowerShell iniciada como administrador. La
+variable `AI_METER_AMD_PROBE` sólo sirve para probar un binario alternativo.
+
 ## Desarrollo
 
 ```powershell
-.\scripts\build_native.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_native.ps1
 .\scripts\build_exe.ps1
 $env:PYTHONPATH='src'; python -m unittest discover -s tests
 python -m compileall src\ai_meter
