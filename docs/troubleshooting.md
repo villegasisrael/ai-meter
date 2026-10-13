@@ -89,6 +89,24 @@ print(rl)
 '@ | python -
 ```
 
+## Contador de cuenta Codex en unknown o desactualizado
+
+- `inicia sesión en Codex`: abrir Codex e iniciar sesión con la cuenta de
+  ChatGPT. La sesión debe corresponder al `CODEX_HOME` monitorizado.
+- `no se encontró Codex`: revisar `doctor`, instalar/abrir Codex o indicar
+  `providers.codex.app_server_path` con la ruta del ejecutable.
+- `actualiza Codex`: la versión instalada no ofrece `account/usage/read`.
+- Un timeout o error de red conserva el último dato como desactualizado.
+  Pulsar `r` reintenta; la consulta automática ocurre cada 15 minutos.
+- Si hoy o ayer no está en la respuesta, se muestra `unknown` aunque el
+  acumulado exista. No se infiere cero ni se suma la actividad local.
+- `usage_api_enabled = false` deja sólo las métricas locales. No hace falta
+  una API key de pago; las estadísticas usan la sesión existente de Codex.
+
+No ejecutar como administrador sólo para leer tokens. Si se valida desde un
+sandbox que usa otro usuario/home, la prueba puede no ver la sesión de Windows;
+ejecutar `ai-meter` normalmente bajo el usuario que inició sesión en Codex.
+
 ## Claude unknown
 
 Revisar:

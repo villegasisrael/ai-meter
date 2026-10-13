@@ -12,6 +12,9 @@ La TUI debe seguir fluida sin bloquear render por IO, subprocess o parseo grande
 - Heavy collect: `app.collector_heavy_interval_s`, default 10s.
 - Hardware: `providers.hardware.poll_interval_ms`, mínimo/default 1000ms.
 - Claude API: opt-in, `providers.claude.usage_api_interval_s`, default 900s.
+- Cuenta Codex: `providers.codex.usage_api_interval_s`, default 900s, mínimo 60s.
+  Worker separado, timeout de consulta 25s. El ejecutable se descubre una vez;
+  no se escanean instalaciones ni se ejecutan procesos durante el render.
 - `cpu_freq()`: cache 2s.
 - Top processes: cache 3s.
 - Hardware: worker persistente separado; el render sólo consume su cache.
@@ -26,7 +29,8 @@ La TUI debe seguir fluida sin bloquear render por IO, subprocess o parseo grande
 - No PowerShell desde render ni light collect.
 - No parsear JSONL completo; usar offsets o tail limitado.
 - Mantener `persist_history=false` por defecto.
-- Mantener Claude API como opt-in.
+- Las APIs de estadísticas se pueden desactivar por proveedor; no hacen
+  inferencia. El contador Codex no escribe caché ni historial en disco.
 - No instalar ni ejecutar drivers para temperatura; usar `unknown` si no hay fuente segura.
 - No crear hilos por tick; usar workers persistentes.
 - No ejecutar proveedores desde `render`.

@@ -28,6 +28,7 @@ class AppSection(BaseModel):
 
 
 class PrivacySection(BaseModel):
+    # Explicit provider usage APIs are metadata-only exceptions to local mode.
     network_disabled: bool = True
     local_only: bool = True
     redact_secrets: bool = True
@@ -44,14 +45,20 @@ class ClaudeProviderSection(ProviderSection):
     usage_api_interval_s: int = 900
 
 
+class CodexProviderSection(ProviderSection):
+    usage_api_enabled: bool = True
+    usage_api_interval_s: int = Field(default=900, ge=60)
+    app_server_path: str = ""
+
+
 class HardwareProviderSection(ProviderSection):
     poll_interval_ms: int = 1000
     amd_probe_path: str = ""
 
 
 class ProvidersSection(BaseModel):
-    codex: ProviderSection = Field(
-        default_factory=lambda: ProviderSection(source_priority=["sessions_jsonl", "logs_sqlite"])  # noqa: E501
+    codex: CodexProviderSection = Field(
+        default_factory=lambda: CodexProviderSection(source_priority=["sessions_jsonl", "logs_sqlite"])  # noqa: E501
     )
     claude: ClaudeProviderSection = Field(
         default_factory=lambda: ClaudeProviderSection(source_priority=["projects_jsonl", "stats_cache"])  # noqa: E501

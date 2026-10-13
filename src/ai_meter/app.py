@@ -10,6 +10,7 @@ from ai_meter.collectors.base import CollectBatch
 from ai_meter.collectors.claude import ClaudeCollector
 from ai_meter.collectors.claude_api_usage import ClaudeApiUsageCollector, ParsedUsage
 from ai_meter.collectors.codex import CodexCollector
+from ai_meter.collectors.codex_account_usage import AccountUsageState, CodexAccountUsageCollector
 from ai_meter.collectors.system import SystemCollector
 from ai_meter.config import AppConfig
 from ai_meter.hardware.cpu_identity import detect_cpu_identity
@@ -33,6 +34,7 @@ class DashboardSnapshot:
     hardware_metrics: list[dict[str, Any]] = field(default_factory=list)
     hardware_provider_status: dict[str, dict[str, Any]] = field(default_factory=dict)
     claude_api_usage: ParsedUsage | None = None
+    codex_account: AccountUsageState | None = None
     cpu_history: list[float] = field(default_factory=list)
     cpu_avg: float | None = None
     cpu_peak: float | None = None
@@ -59,6 +61,15 @@ class MonitorEngine:
         self.claude_collector = (
             ClaudeCollector(paths, offset_store)
             if self.config.providers.claude.enabled
+            else None
+        )
+        self.codex_account = (
+            CodexAccountUsageCollector(
+                paths.codex_home,
+                cache_seconds=config.providers.codex.usage_api_interval_s,
+                app_server_path=config.providers.codex.app_server_path,
+            )
+            if config.providers.codex.enabled and config.providers.codex.usage_api_enabled
             else None
         )
         self.system_collector = SystemCollector(
@@ -128,6 +139,10 @@ class MonitorEngine:
                     self._check_claude_api_alerts(result)
         except Exception:
             pass
+
+    def run_codex_account_collection(self) -> None:
+        if self.codex_account is not None:
+            self.codex_account.fetch_if_due()
 
     def reload_claude_api(self) -> bool:
         """Rebuild the Claude usage collector from disk (e.g. after a re-login).
@@ -345,6 +360,7 @@ class MonitorEngine:
                 ],
                 hardware_provider_status=hardware_status,
                 claude_api_usage=self._claude_api_usage,
+                codex_account=self.codex_account.snapshot() if self.codex_account else None,
                 cpu_history=list(self._cpu_history),
                 cpu_avg=(self._cpu_sum / self._cpu_count) if self._cpu_count else None,
                 cpu_peak=self._cpu_peak if self._cpu_count else None,

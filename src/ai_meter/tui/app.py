@@ -16,6 +16,7 @@ from textual.widgets import Footer, Static
 from ai_meter.app import MonitorEngine
 from ai_meter.collectors.claude_oauth import OAuthLoginFlow, write_credentials
 from ai_meter.models import RuntimeState
+from ai_meter.tui.codex import render_account_usage
 from ai_meter.tui.hardware import HardwarePanelRenderer, HardwarePanelSpec
 from ai_meter.tui.relogin import ReloginModal
 from ai_meter.tui.widgets import (
@@ -71,8 +72,9 @@ class AiMeterTui(App[None]):
 
     /* Individual panels */
     .panel { border: round #2a3f52; padding: 0 1; margin: 0 1 1 0; }
-    #claude_panel { height: 1fr; margin: 0 1 1 0; border: round #2a3f52; padding: 0 1; }
-    #codex_panel  { height: 1fr; margin: 0 1 1 0; border: round #2a3f52; padding: 0 1; }
+    #claude_panel { height: 1fr; min-height: 12; margin: 0 1 1 0; border: round #2a3f52; padding: 0 1; }
+    #codex_panel  { height: 1fr; min-height: 16; margin: 0 1 1 0; border: round #2a3f52; padding: 0 1; }
+    #ai_panels { overflow-y: auto; }
     #hardware     { height: auto; margin: 0 0 1 0; border: round #5a3a18; padding: 0 1; }
     #system       { height: auto; margin: 0 0 1 0; border: round #2a3f52; padding: 0 1; }
     #events       { height: 1fr; margin: 0 0 1 0; border: round #2a3f52; padding: 0 1; }
@@ -91,6 +93,7 @@ class AiMeterTui(App[None]):
         self._heavy_worker: PeriodicWorker | None = None
         self._hardware_worker: PeriodicWorker | None = None
         self._api_worker: PeriodicWorker | None = None
+        self._codex_account_worker: PeriodicWorker | None = None
         self._last_section_render: dict[str, float] = {}
         self._hardware_renderer = HardwarePanelRenderer()
         self._hardware_overview_panel = HardwarePanelSpec(
@@ -133,11 +136,14 @@ class AiMeterTui(App[None]):
         self._render_snapshot(force=True)
 
     def on_unmount(self) -> None:
+        if self.engine.codex_account is not None:
+            self.engine.codex_account.close()
         for worker in (
             self._light_worker,
             self._heavy_worker,
             self._hardware_worker,
             self._api_worker,
+            self._codex_account_worker,
         ):
             if worker is not None:
                 worker.stop(timeout_s=0.5)
@@ -184,6 +190,14 @@ class AiMeterTui(App[None]):
                 should_run=lambda: not self.state.paused,
             )
             self._api_worker.start(initial_delay_s=0.5)
+        if self.engine.codex_account is not None:
+            self._codex_account_worker = PeriodicWorker(
+                "codex-account",
+                self.engine.run_codex_account_collection,
+                float(self.engine.codex_account.cache_seconds),
+                should_run=lambda: not self.state.paused,
+            )
+            self._codex_account_worker.start(initial_delay_s=0.5)
 
     def action_refresh_now(self) -> None:
         if self._light_worker is not None:
@@ -194,6 +208,9 @@ class AiMeterTui(App[None]):
             self._hardware_worker.trigger(force=True)
         if self._api_worker is not None:
             self._api_worker.trigger(force=True)
+        if self._codex_account_worker is not None:
+            self.engine.codex_account.request_refresh()
+            self._codex_account_worker.trigger(force=True)
         self._render_snapshot(force=True)
 
     def action_pause(self) -> None:
@@ -306,6 +323,10 @@ class AiMeterTui(App[None]):
         self.current_view = num
         self._sync_view_visibility()
         self._render_snapshot(force=True)
+        panel_id = {"2": "#claude_panel", "3": "#codex_panel"}.get(num)
+        if panel_id:
+            for panel in self.query(panel_id):
+                panel.scroll_visible(animate=False, top=True)
 
     def _render_snapshot(self, force: bool = False) -> None:
         now = time.monotonic()
@@ -313,7 +334,7 @@ class AiMeterTui(App[None]):
         paused_tag = "[yellow]PAUSED[/] | " if self.state.paused else ""
         api_tag = (
             "[green]usage-api=on[/]"
-            if self.engine.claude_api is not None
+            if self.engine.claude_api is not None or self.engine.codex_account is not None
             else "[grey50]usage-api=off[/]"
         )
         providers = ",".join(self.engine.enabled_ai_providers) or "none"
@@ -437,29 +458,30 @@ class AiMeterTui(App[None]):
             codex_widget = self.query_one("#codex_panel", Static)
             limit_w = self._limit_bar_width(codex_widget)
             activity_w = self._activity_width(codex_widget)
-            activity_h = self._activity_graph_height(codex_widget, reserved_lines=9)
             codex_total = latest_total(snap.codex_usage)
             codex_vals = usage_values(snap.codex_usage)
-            codex_graph = render_activity_graph(
-                codex_vals, width=activity_w, height=activity_h
-            )
             codex_src = latest_field(snap.codex_usage, "source")
-            codex_acc = latest_field(snap.codex_usage, "accuracy")
             codex_meta = snap.provider_meta.get("codex", {})
             codex_limits = (
                 codex_meta.get("rate_limits", {}) if isinstance(codex_meta, dict) else {}
             )
-            codex_widget.update(
-                "[bold dodger_blue1]CODEX[/]\n"
-                f"plan: [white]{codex_limits.get('plan_type', 'unknown')}[/]\n"
-                f"5h     {self._render_limit_line(codex_limits, 'primary', limit_w)}\n"
-                f"weekly {self._render_limit_line(codex_limits, 'secondary', limit_w)}\n"
-                f"tokens (last): [white]{codex_total if codex_total is not None else 'unknown'}[/]\n"
-                f"source: [cyan]{codex_src}[/] | acc: [cyan]{codex_acc}[/]\n"
-                f"activity [grey40]history ({len(codex_vals)} points)[/]\n"
-                f"{codex_graph}\n"
-                f"samples: {len(snap.codex_usage)}"
-            )
+            content_w = self._panel_content_width(codex_widget)
+            rule = f"[#2a3f52]{'─' * content_w}[/]"
+            account_lines = render_account_usage(snap.codex_account, content_w)
+            total_text = f"{codex_total:,}" if codex_total is not None else "unknown"
+            lines = [
+                f"[bold cyan]CODEX[/]  plan: [white]{codex_limits.get('plan_type', 'unknown')}[/]",
+                f"5h     {self._render_limit_line(codex_limits, 'primary', limit_w)}",
+                f"weekly {self._render_limit_line(codex_limits, 'secondary', limit_w)}",
+                rule,
+                *account_lines,
+                rule,
+                f"[bold cyan]LOCAL[/]  última muestra: [white]{total_text}[/] tokens",
+                f"[grey50]{codex_src} · actividad reciente · {len(codex_vals)} muestras[/]",
+            ]
+            graph_h = max(2, min(8, codex_widget.content_size.height - len(lines)))
+            codex_graph = render_activity_graph(codex_vals, width=activity_w, height=graph_h)
+            codex_widget.update("\n".join([*lines, codex_graph]))
 
         if self.engine.config.providers.hardware.enabled and self._section_due(
             "hardware", self.engine.config.ui.hardware_render_interval_ms, now, force

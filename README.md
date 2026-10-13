@@ -14,6 +14,14 @@ No hace llamadas a modelos ni instala servicios o drivers. En Windows incluye
 probes nativos de usuario para métricas rápidas; el probe opcional de AMD usa
 un Ryzen Master Monitoring SDK que el usuario ya haya instalado.
 
+El panel CODEX muestra tokens de cuenta de hoy, ayer y acumulados, separados de
+la última muestra y la gráfica locales. Consulta `account/usage/read` con el
+Codex instalado y su sesión existente, cada 15 minutos y al pulsar `r`.
+Es una consulta de estadísticas en línea, sin API key de facturación ni llamadas
+a modelos. Los datos ausentes se muestran como `unknown`; una consulta fallida
+conserva el último dato marcado como desactualizado. `K` = miles, `M` = millones,
+`B` = mil millones. No se guarda esta respuesta en disco.
+
 ## Instalacion en Windows
 
 Desde PowerShell:
@@ -128,6 +136,7 @@ Remove-Item ".\src\ai_meter\bin\win-x64\ai-meter-sensor-probe.sys" -Force -Error
 | --- | --- | --- |
 | Codex plan/limites | `~/.codex/sessions/**/*.jsonl`, `~/.codex/archived_sessions/*.jsonl` (`payload.rate_limits`) | `~/.codex/logs_2.sqlite` |
 | Codex tokens/eventos | `~/.codex/sessions/**/*.jsonl`, `~/.codex/archived_sessions/*.jsonl` | `logs_2.sqlite` |
+| Codex tokens de cuenta | Codex App Server `account/usage/read` | Último dato en memoria, marcado desactualizado, o `unknown` |
 | Claude plan | `~/.claude/.credentials.json` | `.claude/backups/*` |
 | Claude tokens/eventos | `~/.claude/projects/**/*.jsonl` | `stats-cache.json` |
 | Claude limites 5h/semanal | OAuth usage API opcional | `unknown` |
@@ -162,6 +171,9 @@ Opciones habituales:
 ```toml
 [providers.codex]
 enabled = true
+usage_api_enabled = true
+usage_api_interval_s = 900
+app_server_path = ""
 
 [providers.claude]
 enabled = true
@@ -179,6 +191,11 @@ persist_history = false
 ```
 
 Con el SDK de AMD ya instalado, el probe incluido se detecta automáticamente.
+Para Codex se prefiere el ejecutable del escritorio instalado en Windows y se
+usa el CLI del PATH como alternativa. `app_server_path` permite indicar un
+ejecutable concreto. `usage_api_enabled = false` desactiva las estadísticas de
+cuenta. Las APIs de estadísticas habilitadas son excepciones explícitas al
+modo local (`privacy.network_disabled`); no habilitan llamadas a modelos.
 En desarrollo usa siempre el Python del proyecto:
 
 ```powershell

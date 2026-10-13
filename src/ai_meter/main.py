@@ -15,6 +15,7 @@ from rich.table import Table
 
 from ai_meter.app import MonitorEngine
 from ai_meter.collectors.system import SystemCollector
+from ai_meter.collectors.codex_account_usage import discover_codex_command
 from ai_meter.config import AppConfig, ConfigManager
 from ai_meter.hardware.cpu_identity import detect_cpu_identity
 from ai_meter.hardware.factory import create_hardware_providers
@@ -24,7 +25,7 @@ from ai_meter.runtime_store import MemoryOffsetStore
 from ai_meter.storage.db import Database
 from ai_meter.tui.app import AiMeterTui
 
-cli = typer.Typer(help="ai-meter local-only token usage monitor")
+cli = typer.Typer(help="ai-meter local monitor with optional account usage statistics")
 console = Console()
 
 
@@ -38,7 +39,7 @@ def _bootstrap() -> tuple[AppConfig, Database]:
 
 @cli.command()
 def doctor() -> None:
-    """Show local diagnostics and confirm network-disabled mode."""
+    """Show local diagnostics and optional metadata-only usage integrations."""
     paths = resolve_app_paths("ai-meter")
     config_mgr = ConfigManager(paths.config_file)
     config = config_mgr.load()
@@ -52,6 +53,12 @@ def doctor() -> None:
     table.add_row("model_calls", "disabled")
     table.add_row("providers.codex.enabled", str(config.providers.codex.enabled).lower())
     table.add_row("providers.claude.enabled", str(config.providers.claude.enabled).lower())
+    codex_api_enabled = config.providers.codex.enabled and config.providers.codex.usage_api_enabled
+    table.add_row("codex account usage", "enabled" if codex_api_enabled else "disabled")
+    command = discover_codex_command(config.providers.codex.app_server_path) if codex_api_enabled else None
+    table.add_row("codex app-server", command[0] if command else "unknown / disabled")
+    table.add_row("codex account interval", f"{config.providers.codex.usage_api_interval_s}s")
+    table.add_row("usage network", "metadata only; no model calls")
     table.add_row(
         "claude usage_api",
         "enabled"

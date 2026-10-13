@@ -5,7 +5,8 @@
 ## Flujo
 
 1. `main.py` carga config y crea `MonitorEngine`.
-2. `AiMeterTui` crea workers persistentes para light collect, heavy collect y Claude API opcional.
+2. `AiMeterTui` crea workers persistentes para light collect, heavy collect,
+   Claude API y estadísticas de cuenta Codex opcionales.
 3. `HardwareRegistry` consulta proveedores, selecciona fuentes y descarta
    métricas vencidas.
 4. `MonitorEngine` normaliza collectors y hardware en `DashboardSnapshot`.
@@ -17,7 +18,9 @@
 - Light collect: `app.collector_light_interval_ms`, por defecto 250ms, solo sistema rapido.
 - Heavy collect: `app.collector_heavy_interval_s`, por defecto 10s.
 - Hardware: `providers.hardware.poll_interval_ms`, mínimo y default 1000ms.
-- Claude API: deshabilitada por defecto; si se habilita usa `providers.claude.usage_api_interval_s`.
+- Claude API: habilitada por defecto; usa `providers.claude.usage_api_interval_s`.
+- Cuenta Codex: habilitada por defecto; `providers.codex.usage_api_interval_s`
+  (900 s, mínimo 60 s), con refresco manual mediante `r`.
 - Winprobe: solo Windows, `app.winprobe_interval_ms`, por defecto 250ms.
 - Linux/Ubuntu: `SystemCollector` usa `psutil` para sistema rapido.
 - Hardware: worker dedicado; usa el probe AMD incluido (si el SDK oficial ya
@@ -28,6 +31,14 @@
   desconocidos no cargan binarios de Ryzen Master.
 
 No crear hilos por tick. Usar `PeriodicWorker`.
+
+`collectors/codex_account_usage.py` inicia un app-server breve por consulta,
+con `CODEX_HOME` igual al directorio monitorizado. El lector de respuestas vive
+sólo durante esa consulta; hay timeout global de 25 s y cierre/cancelación del
+proceso propio. No se conecta a conversaciones ni envía métodos de inferencia.
+`DashboardSnapshot.codex_account` entrega datos y estado coherentes a la UI;
+`tui/codex.py` representa los contadores sin IO. Las respuestas de cuenta se
+mantienen exclusivamente en memoria y nunca se mezclan con `usage_samples`.
 
 ## Hot path
 

@@ -25,10 +25,28 @@ python -m ai_meter.main paths
 - config/data paths
 - proveedores habilitados
 - estado de Claude usage API
+- estado de la integración de cuenta Codex, ejecutable detectado e intervalo
 - homes de Codex/Claude
 - fuente de metricas sistema
 - estado de cada proveedor de hardware
 - temperatura CPU/GPU como valor real o `unknown`
+
+El diagnóstico de Codex muestra configuración y disponibilidad del ejecutable;
+la consulta autenticada se ejecuta en la TUI. En CODEX, `r` solicita estadísticas
+actualizadas incluso estando pausado. `p` detiene la recolección automática.
+La sección de cuenta muestra hoy, ayer, acumulado y antigüedad; debajo continúa
+la actividad local. No requiere cambiar `persist_history=false`.
+
+```toml
+[providers.codex]
+usage_api_enabled = true
+usage_api_interval_s = 900
+app_server_path = ""
+```
+
+La ruta opcional corresponde al ejecutable Codex, sin argumentos. En Windows
+se prefiere la instalación de escritorio; como alternativa se usa el CLI del
+PATH. No se inicia sesión automáticamente ni se modifican sus credenciales.
 
 Comandos utiles si GPU aparece `unknown`:
 

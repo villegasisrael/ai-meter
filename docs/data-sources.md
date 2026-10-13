@@ -16,6 +16,22 @@ Fallback:
 
 Limitacion: Codex expone porcentaje usado y reset, no un limite absoluto en tokens/unidades.
 
+Tokens de cuenta (separados de las muestras locales):
+
+- `Codex App Server`, método documentado `account/usage/read`.
+- `summary.lifetimeTokens` y `dailyUsageBuckets[].{startDate,tokens}`.
+- Se usa la sesión que administra el Codex instalado. `ai-meter` no abre
+  `auth.json`, no extrae credenciales y no inicia conversaciones ni turnos.
+- Sólo se envían `initialize`, `initialized` y `account/usage/read` por stdio.
+- Consulta habilitada por defecto mediante `providers.codex.usage_api_enabled`;
+  intervalo predeterminado de 900 s. Requiere conexión para leer estadísticas,
+  sin API key de facturación ni consumo de modelos.
+- Las fechas de los buckets se conservan tal como las entrega el servicio.
+  Hoy/ayer se seleccionan con la fecha local; un día ausente es `unknown`, no 0.
+- No sumar estos totales con los JSONL: tienen distinto alcance y podrían
+  duplicarse. Un fallo conserva el último resultado en memoria como desactualizado.
+- Referencia: https://learn.chatgpt.com/docs/app-server#7-token-usage-chatgpt
+
 ## Claude
 
 Plan:
